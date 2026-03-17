@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useHubStore } from '@/stores/hubStore';
+import { useAuthStore } from '@/stores/authStore';
 import { hubsApi } from '@/services/api';
 import { commandService } from '@/services/commandService';
 import { Button } from '@/components/ui/button';
@@ -76,6 +77,8 @@ export function ArduinoFlash() {
   const editorViewRef = useRef<EditorView | null>(null);
 
   const { hubs = [], fetchHubs } = useHubStore();
+  const { user } = useAuthStore();
+  const isViewOnly = user?.role === "viewer";
 
   // Fetch hubs on mount
   useEffect(() => {
@@ -384,13 +387,21 @@ export function ArduinoFlash() {
           {/* Flash Button */}
           <Button
             onClick={handleFlash}
-            disabled={!selectedHub || !selectedPort || !fileContent}
+            disabled={!selectedHub || !selectedPort || !fileContent || isViewOnly}
             className="w-full gap-2 h-10"
             size="lg"
+            title={isViewOnly ? "View-only mode does not allow flashing" : ""}
           >
             <Play className="h-4 w-4" />
-            Flash
+            {isViewOnly ? "Read-Only Mode" : "Flash"}
           </Button>
+
+          {isViewOnly && (
+            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-700 dark:text-amber-400 flex gap-2">
+              <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <span>Flash is disabled in view-only mode</span>
+            </div>
+          )}
         </div>
       </div>
 

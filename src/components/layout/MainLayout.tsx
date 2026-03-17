@@ -206,7 +206,14 @@ export function MainLayout({ children }: MainLayoutProps) {
                 <div className={`flex flex-col min-w-0 whitespace-nowrap transition-opacity duration-200 ${
                   showSidebarText ? 'opacity-100' : 'opacity-0'
                 }`}>
-                  <span className="text-sm font-medium text-foreground truncate">{user?.username || 'User'}</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm font-medium text-foreground truncate">{user?.username || 'User'}</span>
+                    {user?.role === 'viewer' && (
+                      <span className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-700 dark:text-amber-400 rounded whitespace-nowrap">
+                        Viewer
+                      </span>
+                    )}
+                  </div>
                   <span className="text-xs text-muted-foreground">Connected</span>
                 </div>
               </div>
