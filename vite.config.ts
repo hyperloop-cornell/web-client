@@ -8,11 +8,11 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 4173,
-    hmr: {
-      clientPort: 443,
-      host: 'gui.cornellhyperloop.com',
-      protocol: 'wss',
-    },
+    hmr: process.env.VITE_HMR_HOST ? {
+      host: process.env.VITE_HMR_HOST,
+      protocol: process.env.VITE_HMR_PROTOCOL || 'wss',
+      clientPort: parseInt(process.env.VITE_HMR_PORT || '443'),
+    } : undefined,
   },
   resolve: {
     alias: {

@@ -181,12 +181,23 @@ export const hubsApi = {
 
 // WebSocket URL helper
 export function getWebSocketUrl(token?: string): string {
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsHost = API_BASE_URL.replace(/^https?:\/\//, '');
-  const wsUrl = `${wsProtocol}//${wsHost}/ws/client`;
+  // Use dedicated WebSocket URL if provided, otherwise derive from API base URL
+  let wsUrl: string;
+  
+  if (import.meta.env.VITE_WS_URL) {
+    // If explicit WebSocket URL is set, use it
+    wsUrl = import.meta.env.VITE_WS_URL;
+  } else {
+    // Otherwise derive from API base URL
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = API_BASE_URL.replace(/^https?:\/\//, '');
+    wsUrl = `${wsProtocol}//${wsHost}/ws/client`;
+  }
   
   if (token) {
-    return `${wsUrl}?token=${encodeURIComponent(token)}`;
+    // Avoid double query params
+    const separator = wsUrl.includes('?') ? '&' : '?';
+    return `${wsUrl}${separator}token=${encodeURIComponent(token)}`;
   }
   
   return wsUrl;
