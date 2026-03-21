@@ -12,6 +12,7 @@ interface AuthState {
 
   // Actions
   login: (credentials: LoginCredentials) => Promise<void>;
+  loginViewer: () => Promise<void>;
   logout: () => void;
   checkAuth: () => Promise<void>;
   clearError: () => void;
@@ -53,6 +54,47 @@ export const useAuthStore = create<AuthState>((set) => ({
     } catch (error: any) {
       const errorMessage =
         error.response?.data?.detail || 'Login failed. Please try again.';
+      set({
+        user: null,
+        token: null,
+        isAuthenticated: false,
+        isLoading: false,
+        error: errorMessage,
+      });
+      localStorage.removeItem('auth_token');
+      throw error;
+    }
+  },
+
+  loginViewer: async () => {
+    set({ isLoading: true, error: null });
+    try {
+      const tokenData = await authApi.loginViewer();
+      const token = tokenData.access_token;
+
+      // Store token
+      localStorage.setItem('auth_token', token);
+
+      // Establish WebSocket connection
+      try {
+        webSocketService.connect(token);
+      } catch (e) {
+        console.error('Failed to connect WebSocket after viewer login:', e);
+      }
+
+      // Fetch user data
+      const user = await authApi.getCurrentUser();
+
+      set({
+        user,
+        token,
+        isAuthenticated: true,
+        isLoading: false,
+        error: null,
+      });
+    } catch (error: any) {
+      const errorMessage =
+        error.response?.data?.detail || 'View-only login failed. Please try again.';
       set({
         user: null,
         token: null,

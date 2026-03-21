@@ -11,6 +11,7 @@ export interface AuthToken {
 
 export interface User {
   username: string;
+  role?: string;  // "admin" or "viewer"
 }
 
 // Hub types

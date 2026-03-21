@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 export function Login() {
-  const { login, isAuthenticated, isLoading, error, clearError } = useAuthStore();
+  const { login, loginViewer, isAuthenticated, isLoading, error, clearError } = useAuthStore();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
@@ -17,6 +17,15 @@ export function Login() {
 
     try {
       await login({ username, password });
+    } catch (error) {
+      // Error is handled by the store
+    }
+  };
+
+  const handleViewOnly = async () => {
+    clearError();
+    try {
+      await loginViewer();
     } catch (error) {
       // Error is handled by the store
     }
@@ -70,6 +79,22 @@ export function Login() {
               {isLoading ? 'Signing in...' : 'Sign in'}
             </Button>
           </form>
+
+          <div className="mt-6 pt-6 border-t space-y-3">
+            <p className="text-sm text-muted-foreground text-center">Or</p>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={handleViewOnly}
+              disabled={isLoading}
+            >
+              {isLoading ? 'Loading...' : 'View Only Mode'}
+            </Button>
+            <p className="text-xs text-muted-foreground text-center">
+              View-only mode allows you to browse all pages but cannot flash firmware
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>

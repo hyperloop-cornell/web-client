@@ -64,6 +64,11 @@ export const authApi = {
     return response.data;
   },
 
+  loginViewer: async (): Promise<AuthToken> => {
+    const response = await api.post<AuthToken>('/auth/login-viewer');
+    return response.data;
+  },
+
   getCurrentUser: async (): Promise<User> => {
     const response = await api.get<User>('/auth/me');
     return response.data;
