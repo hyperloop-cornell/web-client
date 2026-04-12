@@ -10,8 +10,43 @@ import type {
   TaskStatusResponse,
 } from '@/types';
 
-// Get API base URL from environment or use default
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+function isLocalHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+}
+
+function trimTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
+function resolveApiBaseUrl(): string {
+  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+
+  if (typeof window === 'undefined') {
+    return trimTrailingSlash(configuredBaseUrl || 'http://localhost:8080');
+  }
+
+  const pageHostname = window.location.hostname;
+  const pageOrigin = window.location.origin;
+
+  if (!configuredBaseUrl) {
+    return isLocalHostname(pageHostname) ? 'http://localhost:8080' : pageOrigin;
+  }
+
+  try {
+    const configuredUrl = new URL(configuredBaseUrl, pageOrigin);
+
+    // Guard against accidentally shipping localhost API config to non-local clients.
+    if (!isLocalHostname(pageHostname) && isLocalHostname(configuredUrl.hostname)) {
+      return pageOrigin;
+    }
+
+    return trimTrailingSlash(configuredUrl.toString());
+  } catch {
+    return trimTrailingSlash(configuredBaseUrl);
+  }
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
@@ -189,9 +224,9 @@ export function getWebSocketUrl(token?: string): string {
     wsUrl = import.meta.env.VITE_WS_URL;
   } else {
     // Otherwise derive from API base URL
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = API_BASE_URL.replace(/^https?:\/\//, '');
-    wsUrl = `${wsProtocol}//${wsHost}/ws/client`;
+    const apiUrl = new URL(API_BASE_URL, window.location.origin);
+    const wsProtocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    wsUrl = `${wsProtocol}//${apiUrl.host}/ws/client`;
   }
   
   if (token) {
