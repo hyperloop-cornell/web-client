@@ -8,6 +8,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 4173,
+    allowedHosts: ['gui.cornellhyperloop.com'],
     hmr: process.env.VITE_HMR_HOST ? {
       host: process.env.VITE_HMR_HOST,
       protocol: process.env.VITE_HMR_PROTOCOL || 'wss',
