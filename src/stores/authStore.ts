@@ -50,9 +50,20 @@ export const useAuthStore = create<AuthState>((set) => ({
         isLoading: false,
         error: null,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       const errorMessage =
-        error.response?.data?.detail || 'Login failed. Please try again.';
+        typeof error === 'object' &&
+        error !== null &&
+        'response' in error &&
+        typeof error.response === 'object' &&
+        error.response !== null &&
+        'data' in error.response &&
+        typeof error.response.data === 'object' &&
+        error.response.data !== null &&
+        'detail' in error.response.data &&
+        typeof error.response.data.detail === 'string'
+          ? error.response.data.detail
+          : 'Login failed. Please try again.';
       set({
         user: null,
         token: null,
@@ -110,7 +121,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         isLoading: false,
         error: null,
       });
-    } catch (error) {
+    } catch {
       localStorage.removeItem('auth_token');
       set({
         user: null,

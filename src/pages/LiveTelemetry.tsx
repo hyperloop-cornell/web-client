@@ -10,9 +10,20 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ChevronDown, ChevronRight, Send, Terminal as TerminalIcon, Clock } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import type { DropResult, DragStart, DragUpdate } from '@hello-pangea/dnd';
 import { commandService } from '@/services/commandService';
 import { format } from 'date-fns';
-import type { TimeWindow, SensorMapping, CustomTimeRange, DeviceChartData, ChartData, MergedChartData } from '@/types';
+import type {
+  TimeWindow,
+  SensorMapping,
+  CustomTimeRange,
+  DeviceChartData,
+  ChartData,
+  MergedChartData,
+  ActiveSubscription,
+  FieldChartData,
+  ChartDataPoint,
+} from '@/types';
 import { isMergedChart } from '@/types';
 import { useHubStore } from '@/stores/hubStore';
 import { useTelemetryStore } from '@/stores/telemetryStore';
@@ -20,6 +31,12 @@ import { ChartSchemaModal } from '@/components/ChartSchemaModal';
 import { SchemaDropdown } from '@/components/SchemaDropdown';
 import { DeviceChart } from '@/components/DeviceChart';
 import { saveCustomSchema } from '@/lib/customSchemas';
+
+type ChartEntry = {
+  sub: ActiveSubscription;
+  chartData: DeviceChartData | null;
+  key: string;
+};
 
 export function LiveTelemetry() {
   const [timeWindow, setTimeWindow] = useState<TimeWindow>('1h');
@@ -43,7 +60,7 @@ export function LiveTelemetry() {
 
   // Get devices with chart data
   const devicesWithCharts = activeSubscriptions
-    .map((sub: any) => {
+    .map((sub: ActiveSubscription): ChartEntry => {
       const key = `${sub.hubId}:${sub.portId}`;
 
       // Fetch raw fields from store (getChartData already applies a time window filter for standard windows)
@@ -52,10 +69,10 @@ export function LiveTelemetry() {
         : getChartData(sub.hubId, sub.portId, timeWindow);
 
       // If custom range selected, further filter the returned points to within start..end
-      const filteredFields = (timeWindow === 'custom' && customTimeRange)
-        ? rawFields.map((f: any) => ({
+      const filteredFields: FieldChartData[] = (timeWindow === 'custom' && customTimeRange)
+        ? rawFields.map((f: FieldChartData) => ({
             ...f,
-            data: f.data.filter((p: any) => p.timestamp >= customTimeRange.start.getTime() && p.timestamp <= customTimeRange.end.getTime())
+            data: f.data.filter((p: ChartDataPoint) => p.timestamp >= customTimeRange.start.getTime() && p.timestamp <= customTimeRange.end.getTime())
           }))
         : rawFields;
 
@@ -68,13 +85,13 @@ export function LiveTelemetry() {
 
       return { sub, chartData: deviceChartData, key };
     })
-    .filter(({ chartData }: any) => chartData && chartData.fields.length > 0);
+    .filter((entry): entry is ChartEntry & { chartData: DeviceChartData } => !!entry.chartData && entry.chartData.fields.length > 0);
 
   // Combine device charts with merged charts
   const allCharts = new Map<string, ChartData>();
   
   // Add individual device charts
-  devicesWithCharts.forEach(({ key, chartData }: any) => {
+  devicesWithCharts.forEach(({ key, chartData }) => {
     if (chartData && !Array.from(mergedCharts.values()).some(m => m.sources.some(s => `${s.hubId}:${s.portId}` === key))) {
       allCharts.set(key, chartData);
     }
@@ -85,15 +102,12 @@ export function LiveTelemetry() {
     allCharts.set(id, chart);
   });
 
-  // Initialize chart order when devices change
-  useEffect(() => {
+  const orderedChartKeys = (() => {
     const newKeys = Array.from(allCharts.keys());
-    setChartOrder(prev => {
-      const existingKeys = prev.filter(k => newKeys.includes(k));
-      const missingKeys = newKeys.filter(k => !prev.includes(k));
-      return [...existingKeys, ...missingKeys];
-    });
-  }, [allCharts.size]);
+    const existingKeys = chartOrder.filter((key) => newKeys.includes(key));
+    const missingKeys = newKeys.filter((key) => !chartOrder.includes(key));
+    return [...existingKeys, ...missingKeys];
+  })();
 
   const applyCustomTimeRange = () => {
     if (!customStartDate || !customStartTime || !customEndDate || !customEndTime) {
@@ -122,7 +136,7 @@ export function LiveTelemetry() {
     }
   };
 
-  const onDragEnd = (result: any) => {
+  const onDragEnd = (result: DropResult) => {
     setDraggedIndex(null);
     setDropTargetIndex(null);
     
@@ -190,11 +204,11 @@ export function LiveTelemetry() {
     setChartOrder(items);
   };
   
-  const onDragStart = (start: any) => {
+  const onDragStart = (start: DragStart) => {
     setDraggedIndex(start.source.index);
   };
   
-  const onDragUpdate = (update: any) => {
+  const onDragUpdate = (update: DragUpdate) => {
     if (update.destination) {
       setDropTargetIndex(update.destination.index);
     } else {
@@ -300,7 +314,7 @@ export function LiveTelemetry() {
           </Card>
         ) : (
           <div className="space-y-2">
-            {activeSubscriptions.map((sub: any) => {
+            {activeSubscriptions.map((sub: ActiveSubscription) => {
               const key = `${sub.hubId}:${sub.portId}`;
               const device = telemetryDevices.get(key);
               const isExpanded = expandedTerminals.has(key);
@@ -435,7 +449,7 @@ export function LiveTelemetry() {
                   ref={provided.innerRef}
                   className="space-y-4 relative"
                 >
-                  {chartOrder
+                  {orderedChartKeys
                     .map(key => allCharts.get(key))
                     .filter(Boolean)
                     .map((chartData, index) => {
@@ -458,7 +472,7 @@ export function LiveTelemetry() {
                             </div>
                           )}
                           <Draggable key={key} draggableId={key} index={index}>
-                            {(provided, snapshot) => (
+                            {(provided) => (
                               <div
                                 ref={provided.innerRef}
                                 {...provided.draggableProps}

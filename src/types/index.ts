@@ -103,7 +103,7 @@ export interface TaskStatusMessage {
   type: 'task_status';
   task_id: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
-  result?: any;
+  result?: unknown;
   error?: string;
   timestamp: string;
 }
@@ -246,7 +246,7 @@ export interface Task {
   priority: number;
   port_id: string;
   hub_id: string;
-  result?: any;
+  result?: unknown;
   error?: string;
   created_at: string;
   started_at?: string;

@@ -4,7 +4,10 @@ import type {
   SubscribeMessage,
   UnsubscribeMessage,
   DeviceSubscription,
+  PongMessage,
 } from '@/types';
+
+type OutboundWebSocketMessage = SubscribeMessage | UnsubscribeMessage | PongMessage;
 
 type MessageHandler = (message: WebSocketMessage) => void;
 
@@ -216,7 +219,7 @@ class WebSocketService {
   /**
    * Send a message to the WebSocket server
    */
-  private send(message: any): void {
+  private send(message: OutboundWebSocketMessage): void {
     console.log('Sending WebSocket message:', message);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
@@ -234,7 +237,7 @@ class WebSocketService {
 
     // Handle ping messages by responding with pong
     if (message.type === 'ping') {
-      const pongMessage = {
+      const pongMessage: PongMessage = {
         type: 'pong',
         timestamp: new Date().toISOString(),
       };

@@ -6,8 +6,9 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { Download, GripVertical, Split, Layers } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import type { ChartData, DeviceChartData } from '@/types';
+import type { ChartData, DeviceChartData, MergedChartData } from '@/types';
 import { isMergedChart } from '@/types';
+import type { DraggableProvidedDragHandleProps } from '@hello-pangea/dnd';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,43 +18,47 @@ import {
 
 interface DeviceChartProps {
   data: ChartData;
-  dragHandleProps?: any;
+  dragHandleProps?: DraggableProvidedDragHandleProps;
   onSeparate?: (chartId: string) => void;
   isDragOver?: boolean;
+}
+
+interface ChartRow {
+  timestamp: number;
+  time: string;
+  [key: string]: number | string;
 }
 
 export function DeviceChart({ data, dragHandleProps, onSeparate, isDragOver }: DeviceChartProps) {
   const chartRef = useRef<HTMLDivElement>(null);
 
-  // Handle merged chart data - memoized to prevent infinite loops
-  const merged = useMemo(() => isMergedChart(data), [data]);
-  const sources = useMemo<DeviceChartData[]>(() => merged ? (data as any).sources : [data as DeviceChartData], [merged, data]);
+  const mergedChartData: MergedChartData | undefined = isMergedChart(data) ? data : undefined;
+  const sources = useMemo<DeviceChartData[]>(
+    () => (mergedChartData ? mergedChartData.sources : [data as DeviceChartData]),
+    [mergedChartData, data]
+  );
   const allFields = useMemo(() => 
     sources.flatMap(source => 
       source.fields.map(field => ({
         ...field,
         // Prefix field names with source identifier if merged
-        displayName: merged ? `${source.sensorName} - ${field.fieldName}` : field.fieldName,
+        displayName: mergedChartData ? `${source.sensorName} - ${field.fieldName}` : field.fieldName,
         originalName: field.fieldName,
         sourceId: `${source.hubId}:${source.portId}`
       }))
     ),
-    [sources, merged]
+    [sources, mergedChartData]
   );
 
-  if (!allFields.length || !allFields.some(f => f.data.length > 0)) {
-    return null;
-  }
-
   const handleSeparate = () => {
-    if (merged && onSeparate) {
-      onSeparate((data as any).id);
+    if (mergedChartData && onSeparate) {
+      onSeparate(mergedChartData.id);
     }
   };
 
   // Convert chart data to format expected by Recharts - memoized to prevent infinite loops
-  const chartData = useMemo(() => {
-    const result: any[] = [];
+  const chartData = useMemo<ChartRow[]>(() => {
+    const result: ChartRow[] = [];
     const timestamps = new Set<number>();
     
     // Collect all unique timestamps
@@ -68,7 +73,7 @@ export function DeviceChart({ data, dragHandleProps, onSeparate, isDragOver }: D
 
     // Build data points for each timestamp
     sortedTimestamps.forEach(timestamp => {
-      const point: any = {
+      const point: ChartRow = {
         timestamp,
         time: new Date(timestamp).toLocaleTimeString(),
       };
@@ -85,6 +90,10 @@ export function DeviceChart({ data, dragHandleProps, onSeparate, isDragOver }: D
 
     return result;
   }, [allFields]);
+
+  if (!allFields.length || !allFields.some(f => f.data.length > 0)) {
+    return null;
+  }
 
   const downloadCSV = () => {
     const headers = ['Time', ...allFields.map(f => `${f.displayName} (${f.unit})`)];
@@ -103,8 +112,8 @@ export function DeviceChart({ data, dragHandleProps, onSeparate, isDragOver }: D
     const a = document.createElement('a');
     a.href = url;
     const deviceData = data as DeviceChartData;
-    const fileName = merged 
-      ? `merged_chart_${(data as any).id}_${Date.now()}.csv`
+    const fileName = mergedChartData
+      ? `merged_chart_${mergedChartData.id}_${Date.now()}.csv`
       : `${deviceData.sensorName}_${deviceData.hubId}_${deviceData.portId}_${Date.now()}.csv`;
     a.download = fileName;
     a.click();
@@ -122,8 +131,8 @@ export function DeviceChart({ data, dragHandleProps, onSeparate, isDragOver }: D
     const url = canvas.toDataURL(`image/${format}`);
     const a = document.createElement('a');
     a.href = url;
-    const imageFileName = merged
-      ? `merged_chart_${(data as any).id}_${Date.now()}.${format}`
+    const imageFileName = mergedChartData
+      ? `merged_chart_${mergedChartData.id}_${Date.now()}.${format}`
       : `${(data as DeviceChartData).sensorName}_${(data as DeviceChartData).hubId}_${(data as DeviceChartData).portId}_${Date.now()}.${format}`;
     a.download = imageFileName;
     a.click();
@@ -145,8 +154,8 @@ export function DeviceChart({ data, dragHandleProps, onSeparate, isDragOver }: D
     });
     
     pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
-    const pdfFileName = merged
-      ? `merged_chart_${(data as any).id}_${Date.now()}.pdf`
+    const pdfFileName = mergedChartData
+      ? `merged_chart_${mergedChartData.id}_${Date.now()}.pdf`
       : `${(data as DeviceChartData).sensorName}_${(data as DeviceChartData).hubId}_${(data as DeviceChartData).portId}_${Date.now()}.pdf`;
     pdf.save(pdfFileName);
   };
@@ -165,7 +174,7 @@ export function DeviceChart({ data, dragHandleProps, onSeparate, isDragOver }: D
               </div>
             )}
             <div className="flex items-center gap-2 flex-wrap">
-              {merged ? (
+              {mergedChartData ? (
                 <>
                   <Layers className="h-4 w-4 text-cyan-400" />
                   <CardTitle className="text-lg">Merged Chart</CardTitle>
@@ -181,7 +190,7 @@ export function DeviceChart({ data, dragHandleProps, onSeparate, isDragOver }: D
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {merged && onSeparate && (
+            {mergedChartData && onSeparate && (
               <Button 
                 variant="outline" 
                 size="sm"

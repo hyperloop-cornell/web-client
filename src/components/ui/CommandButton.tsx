@@ -19,7 +19,7 @@ interface CommandButtonProps {
   disabled?: boolean;
 }
 
-const COMMAND_ICONS: Record<CommandType, any> = {
+const COMMAND_ICONS: Record<CommandType, React.ComponentType<{ className?: string }>> = {
   restart: RotateCw,
   serial_write: Send,
   flash: Zap,

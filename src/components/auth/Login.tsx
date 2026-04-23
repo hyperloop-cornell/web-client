@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 export function Login() {
-  const { login, isAuthenticated, isLoading, error, clearError } = useAuthStore();
+  const { login, isAuthenticated, isLoading, clearError } = useAuthStore();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
@@ -17,7 +17,7 @@ export function Login() {
 
     try {
       await login({ username, password });
-    } catch (error) {
+    } catch {
       // Error is handled by the store
     }
   };

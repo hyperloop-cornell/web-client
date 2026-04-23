@@ -9,6 +9,8 @@ import { Plus, X } from 'lucide-react';
 import { generateArduinoPrintStatement, generateRegexPattern } from '@/lib/customSchemas';
 import type { SensorMapping, SensorField } from '@/types';
 
+type SensorFormat = 'key-value' | 'csv' | 'json';
+
 interface ChartSchemaModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -18,7 +20,7 @@ interface ChartSchemaModalProps {
 export function ChartSchemaModal({ open, onOpenChange, onSave }: ChartSchemaModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [format, setFormat] = useState<'key-value' | 'csv' | 'json'>('key-value');
+  const [format, setFormat] = useState<SensorFormat>('key-value');
   const [fields, setFields] = useState<SensorField[]>([]);
 
   const addField = () => {
@@ -40,7 +42,7 @@ export function ChartSchemaModal({ open, onOpenChange, onSave }: ChartSchemaModa
 
   const handleSave = () => {
     const schema: SensorMapping = {
-      id: `custom-${Date.now()}`,
+      id: crypto.randomUUID(),
       name,
       description,
       format,
@@ -94,7 +96,7 @@ export function ChartSchemaModal({ open, onOpenChange, onSave }: ChartSchemaModa
 
           <div className="space-y-2">
             <Label htmlFor="format" className="text-cyan-400">Data Format</Label>
-            <Select value={format} onValueChange={(v) => setFormat(v as any)}>
+            <Select value={format} onValueChange={(value) => setFormat(value as SensorFormat)}>
               <SelectTrigger id="format">
                 <SelectValue />
               </SelectTrigger>

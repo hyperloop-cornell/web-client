@@ -7,6 +7,7 @@ import { webSocketService } from '@/services/websocket';
 import { Button } from '@/components/ui/button';
 import { LayoutDashboard, Layers, Activity, LogOut, Zap, Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import loopIcon from '@/assets/loopIcon.png';
+import type { WebSocketMessage } from '@/types';
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -38,24 +39,19 @@ export function MainLayout({ children }: MainLayoutProps) {
 
   // Delay text visibility to sync with collapse animation (300ms)
   useEffect(() => {
-    if (isSidebarCollapsed) {
-      // Hide text immediately when collapsing
-      setShowSidebarText(false);
-    } else {
-      // Delay showing text until animation completes when expanding
-      const timer = setTimeout(() => {
-        setShowSidebarText(true);
-      }, 300);
-      return () => clearTimeout(timer);
-    }
+    const timer = window.setTimeout(() => {
+      setShowSidebarText(!isSidebarCollapsed);
+    }, isSidebarCollapsed ? 0 : 300);
+
+    return () => window.clearTimeout(timer);
   }, [isSidebarCollapsed]);
 
   // Register web socket telemetry handler
   useEffect(() => {
-    const handler = (message: any) => {
+    const handler = (message: WebSocketMessage) => {
       try {
         if (message?.type === 'telemetry_stream') {
-          useTelemetryStore.getState().processTelemetry(message as any);
+          useTelemetryStore.getState().processTelemetry(message);
         } else if (message?.type === 'task_status') {
           // Handle task status updates
           const hubStore = useHubStore.getState();
@@ -81,7 +77,6 @@ export function MainLayout({ children }: MainLayoutProps) {
         }
       } catch (e) {
         // Keep handler robust
-        // eslint-disable-next-line no-console
         console.error('Error in WebSocket message handler:', e);
       }
     };
