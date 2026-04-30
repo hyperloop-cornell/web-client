@@ -458,7 +458,7 @@ export function LiveTelemetry() {
                             </div>
                           )}
                           <Draggable key={key} draggableId={key} index={index}>
-                            {(provided, snapshot) => (
+                            {(provided, _snapshot) => (
                               <div
                                 ref={provided.innerRef}
                                 {...provided.draggableProps}
