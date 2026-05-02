@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "vite build",
     "lint": "eslint .",
     "type-check": "tsc --noEmit",
     "test": "tsc -b && npm run lint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "prod": "npm run build && concurrently \"npm run preview\" \"cd ../cloud-services && set ENV_FILE=.env.production && .\\venv\\Scripts\\python.exe -m uvicorn src.main:app --host 0.0.0.0 --port 8080\""
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.1",
@@ -50,6 +51,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.23",
+    "concurrently": "^9.2.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",

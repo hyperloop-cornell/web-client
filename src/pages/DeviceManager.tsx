@@ -193,9 +193,9 @@ export function DeviceManager() {
     return hub?.connections.find((c) => c.port_id === portId);
   };
 
-  const getSensorType = (hubId: string, portId: string): string | undefined => {
-    return detectedSensors.get(`${hubId}:${portId}`);
-  };
+  //const getSensorType = (hubId: string, portId: string): string | undefined => {
+    //return detectedSensors.get(`${hubId}:${portId}`);
+  //};
 
   const isSubscribed = (hubId: string, portId: string): boolean => {
     return activeSubscriptions.some((s) => s.hubId === hubId && s.portId === portId);
@@ -322,7 +322,7 @@ export function DeviceManager() {
                 ) : (
                   hub.ports.map((port) => {
                     const connection = getConnectionStatus(hub.hubId, port.port_id);
-                    const sensorType = getSensorType(hub.hubId, port.port_id);
+                    //const _sensorType = getSensorType(hub.hubId, port.port_id);
                     const subscribed = isSubscribed(hub.hubId, port.port_id);
                     const selected = isDeviceSelected(hub.hubId, port.port_id);
 
@@ -467,7 +467,7 @@ export function DeviceManager() {
           <CardContent>
             <div className="space-y-2">
               {activeSubscriptions.map((sub) => {
-                const sensorType = getSensorType(sub.hubId, sub.portId);
+                //const _sensorType = getSensorType(sub.hubId, sub.portId);
                 return (
                   <div
                     key={`${sub.hubId}:${sub.portId}`}
