@@ -17,7 +17,7 @@ export function Login() {
 
     try {
       await login({ username, password });
-    } catch (error) {
+    } catch {
       // Error is handled by the store
     }
   };

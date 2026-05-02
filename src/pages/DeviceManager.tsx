@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useHubStore } from '@/stores/hubStore';
-import { useTelemetryStore } from '@/stores/telemetryStore';
 import { hubsApi } from '@/services/api';
 import { webSocketService } from '@/services/websocket';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,13 +18,13 @@ interface HubWithDevices {
   isExpanded: boolean;
 }
 
+const INACTIVE_TIMEOUT_MS = 60 * 1000; // 1 minute
+
 export function DeviceManager() {
   const { hubs = [], fetchHubs, activeSubscriptions, addSubscription, removeSubscription, selectedDevices, toggleDeviceSelection, clearDeviceSelection } = useHubStore();
-  const { detectedSensors } = useTelemetryStore();
   const [hubsWithDevices, setHubsWithDevices] = useState<HubWithDevices[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [expandedHubs, setExpandedHubs] = useState<Set<string>>(new Set());
-  const INACTIVE_TIMEOUT_MS = 60 * 1000; // 1 minute
   const [sessionActivity, setSessionActivity] = useState<Map<string, { bytesRead: number; bytesWritten: number; lastActive: number }>>(new Map());
   const [, forceUpdate] = useState(0);
 
@@ -35,7 +34,7 @@ export function DeviceManager() {
   }, [fetchHubs]);
 
   // Fetch hub ports and connections
-  const fetchDevices = async () => {
+  const fetchDevices = useCallback(async () => {
     setIsLoading(true);
     try {
       const now = Date.now();
@@ -144,13 +143,13 @@ export function DeviceManager() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [activeSubscriptions, expandedHubs, hubs, sessionActivity, removeSubscription]);
 
   useEffect(() => {
     if (hubs.length > 0) {
       fetchDevices();
     }
-  }, [hubs]);
+  }, [hubs, fetchDevices]);
 
   // Auto-refresh devices every 10 seconds to detect disconnections
   useEffect(() => {
@@ -161,7 +160,7 @@ export function DeviceManager() {
       
       return () => clearInterval(interval);
     }
-  }, [hubs]);
+  }, [hubs, fetchDevices]);
 
   // Force re-render every second to update countdown timers
   useEffect(() => {
@@ -193,9 +192,6 @@ export function DeviceManager() {
     return hub?.connections.find((c) => c.port_id === portId);
   };
 
-  //const getSensorType = (hubId: string, portId: string): string | undefined => {
-    //return detectedSensors.get(`${hubId}:${portId}`);
-  //};
 
   const isSubscribed = (hubId: string, portId: string): boolean => {
     return activeSubscriptions.some((s) => s.hubId === hubId && s.portId === portId);
@@ -322,7 +318,7 @@ export function DeviceManager() {
                 ) : (
                   hub.ports.map((port) => {
                     const connection = getConnectionStatus(hub.hubId, port.port_id);
-                    //const _sensorType = getSensorType(hub.hubId, port.port_id);
+
                     const subscribed = isSubscribed(hub.hubId, port.port_id);
                     const selected = isDeviceSelected(hub.hubId, port.port_id);
 
@@ -467,7 +463,7 @@ export function DeviceManager() {
           <CardContent>
             <div className="space-y-2">
               {activeSubscriptions.map((sub) => {
-                //const _sensorType = getSensorType(sub.hubId, sub.portId);
+
                 return (
                   <div
                     key={`${sub.hubId}:${sub.portId}`}

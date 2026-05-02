@@ -63,6 +63,22 @@ export interface CommandResult {
 class CommandService {
   private readonly DEFAULT_TIMEOUT_MS = 30000;
 
+  private async buildCloseCommandResponse(
+    hubId: string,
+    portId: string,
+    priority?: number
+  ): Promise<TaskStatusResponse> {
+    const closeResponse = await hubsApi.closeConnection(hubId, portId, priority);
+
+    return {
+      task_id: closeResponse.commandId,
+      command_type: 'close',
+      status: closeResponse.status,
+      priority: priority ?? 1,
+      created_at: new Date().toISOString(),
+    };
+  }
+
   /**
    * Execute a command on a device
    */
@@ -124,19 +140,11 @@ class CommandService {
           break;
 
         case 'close':
-          // closeConnection returns a different response format, adapt it
-          const closeResponse = await hubsApi.closeConnection(
+          response = await this.buildCloseCommandResponse(
             hubId,
             portId,
             (params as CloseCommandParams).priority
           );
-          response = {
-            task_id: closeResponse.commandId,
-            command_type: 'close',
-            status: closeResponse.status,
-            priority: (params as CloseCommandParams).priority ?? 1,
-            created_at: new Date().toISOString(),
-          };
           break;
 
         default:

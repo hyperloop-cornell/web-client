@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -21,13 +21,13 @@ export function SchemaDropdown({ onAddNew }: SchemaDropdownProps) {
   const [selectedSchema, setSelectedSchema] = useState<SensorMapping | null>(null);
   const [showViewModal, setShowViewModal] = useState(false);
 
-  // Load schemas when dropdown opens
-  useEffect(() => {
-    if (isOpen) {
-      const customSchemas = getCustomSchemas();
-      setSchemas(customSchemas);
+  const handleOpenChange = (open: boolean) => {
+    setIsOpen(open);
+
+    if (open) {
+      setSchemas(getCustomSchemas());
     }
-  }, [isOpen]);
+  };
 
   const handleDelete = (schemaId: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -51,7 +51,7 @@ export function SchemaDropdown({ onAddNew }: SchemaDropdownProps) {
 
   return (
     <>
-      <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+      <DropdownMenu open={isOpen} onOpenChange={handleOpenChange}>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className="text-white">
             <ChevronDown className="h-4 w-4 mr-2" />

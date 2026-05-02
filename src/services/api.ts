@@ -10,6 +10,35 @@ import type {
   TaskStatusResponse,
 } from '@/types';
 
+interface WrappedListResponse<T> {
+  ports?: T[];
+  connections?: T[];
+  telemetry?: T[];
+}
+
+interface FlashCommandPayload {
+  portId: string;
+  firmwareData: string;
+  priority?: number;
+  boardFqbn?: string;
+}
+
+interface CloseConnectionResponseBody {
+  commandId: string;
+  hubId: string;
+  status: string;
+  message: string;
+}
+
+function extractListResponse<T>(data: T[] | WrappedListResponse<T>, key: keyof WrappedListResponse<T>): T[] {
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  const value = data[key];
+  return Array.isArray(value) ? value : [];
+}
+
 function isLocalHostname(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
@@ -123,23 +152,23 @@ export const hubsApi = {
   },
 
   getPorts: async (hubId: string): Promise<PortInfo[]> => {
-    const response = await api.get<any>(`/api/hubs/${hubId}/ports`);
-    return (response.data.ports || response.data) as PortInfo[];
+    const response = await api.get<PortInfo[] | WrappedListResponse<PortInfo>>(`/api/hubs/${hubId}/ports`);
+    return extractListResponse(response.data, 'ports');
   },
 
   getConnections: async (hubId: string): Promise<ConnectionInfo[]> => {
-    const response = await api.get<any>(`/api/hubs/${hubId}/connections`);
-    return (response.data.connections || response.data) as ConnectionInfo[];
+    const response = await api.get<ConnectionInfo[] | WrappedListResponse<ConnectionInfo>>(`/api/hubs/${hubId}/connections`);
+    return extractListResponse(response.data, 'connections');
   },
 
   getTelemetry: async (hubId: string, limit?: number): Promise<TelemetryEntry[]> => {
-    const response = await api.get<any>(
+    const response = await api.get<TelemetryEntry[] | WrappedListResponse<TelemetryEntry>>(
       `/api/hubs/${hubId}/telemetry`,
       {
         params: { limit },
       }
     );
-    return (response.data.telemetry || response.data) as TelemetryEntry[];
+    return extractListResponse(response.data, 'telemetry');
   },
 
   sendSerialWrite: async (
@@ -166,7 +195,7 @@ export const hubsApi = {
     priority?: number,
     boardFqbn?: string
   ): Promise<TaskStatusResponse> => {
-    const payload: Record<string, any> = {
+    const payload: FlashCommandPayload = {
       portId: portId,
       firmwareData,
       priority,
@@ -202,8 +231,8 @@ export const hubsApi = {
     hubId: string,
     portId: string,
     priority?: number
-  ): Promise<{ commandId: string; hubId: string; status: string; message: string }> => {
-    const response = await api.post(
+  ): Promise<CloseConnectionResponseBody> => {
+    const response = await api.post<CloseConnectionResponseBody>(
       `/api/hubs/${hubId}/commands/close`,
       {
         portId,

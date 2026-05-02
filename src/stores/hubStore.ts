@@ -21,7 +21,7 @@ interface HubState {
   
   // Task management
   addTask: (task: Task) => void;
-  updateTaskStatus: (update: { task_id: string; status: Task['status']; result?: any; error?: string }) => void;
+  updateTaskStatus: (update: { task_id: string; status: Task['status']; result?: unknown; error?: string }) => void;
   removeTask: (taskId: string) => void;
   getActiveTaskForPort: (portId: string) => Task | undefined;
   cleanupCompletedTasks: () => void;
@@ -44,9 +44,20 @@ export const useHubStore = create<HubState>((set, get) => ({
     try {
       const hubs = await hubsApi.getHubs();
       set({ hubs: hubs ?? [], isLoading: false });
-    } catch (error: any) {
+    } catch (error: unknown) {
       const errorMessage =
-        error.response?.data?.detail || 'Failed to fetch hubs';
+        typeof error === 'object' &&
+        error !== null &&
+        'response' in error &&
+        typeof error.response === 'object' &&
+        error.response !== null &&
+        'data' in error.response &&
+        typeof error.response.data === 'object' &&
+        error.response.data !== null &&
+        'detail' in error.response.data &&
+        typeof error.response.data.detail === 'string'
+          ? error.response.data.detail
+          : 'Failed to fetch hubs';
       set({ hubs: [], error: errorMessage, isLoading: false });
     }
   },

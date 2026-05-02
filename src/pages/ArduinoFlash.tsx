@@ -15,6 +15,38 @@ import { fromByteArray, toByteArray } from 'base64-js';
 import sketches from '@/config/arduino-sketches.json';
 import type { PortInfo } from '@/types';
 
+interface SketchPreset {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+}
+
+interface SketchesConfig {
+  presets: SketchPreset[];
+}
+
+const sketchConfig = sketches as SketchesConfig;
+
+function getApiErrorDetail(error: unknown): string | null {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    typeof error.response === 'object' &&
+    error.response !== null &&
+    'data' in error.response &&
+    typeof error.response.data === 'object' &&
+    error.response.data !== null &&
+    'detail' in error.response.data &&
+    typeof error.response.data.detail === 'string'
+  ) {
+    return error.response.data.detail;
+  }
+
+  return null;
+}
+
 // Heuristic mapping from port info to likely board FQBN
 const inferBoardFqbn = (port?: PortInfo): string | undefined => {
   if (!port) return undefined;
@@ -90,7 +122,7 @@ export function ArduinoFlash() {
     if (!editorRef.current) return;
 
     const state = EditorState.create({
-      doc: fileContent,
+      doc: '',
       extensions: [
         basicSetup,
         cpp(),
@@ -151,7 +183,7 @@ export function ArduinoFlash() {
   // Handle preset sketch selection
   const handleSketchSelect = (sketchId: string) => {
     setSelectedSketch(sketchId);
-    const sketch = (sketches as any).presets.find((s: any) => s.id === sketchId);
+    const sketch = sketchConfig.presets.find((s) => s.id === sketchId);
     if (sketch) {
       try {
         // Decode base64 to string
@@ -240,9 +272,9 @@ export function ArduinoFlash() {
       );
 
       alert(isInoSource ? 'Sketch will be compiled and flashed on the hub!' : 'Flash command sent successfully!');
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error starting flash:', error);
-      alert(`Failed to start flash process: ${error.response?.data?.detail || 'Unknown error'}`);
+      alert(`Failed to start flash process: ${getApiErrorDetail(error) || 'Unknown error'}`);
     }
   };
 
@@ -268,7 +300,7 @@ export function ArduinoFlash() {
                     <SelectValue placeholder="Select a preset sketch..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {(sketches as any).presets.map((sketch: any) => (
+                    {sketchConfig.presets.map((sketch) => (
                       <SelectItem key={sketch.id} value={sketch.id}>
                         {sketch.name}
                       </SelectItem>
@@ -294,7 +326,7 @@ export function ArduinoFlash() {
 
               {selectedSketch && (
                 <p className="text-xs text-muted-foreground">
-                  Loaded: {(sketches as any).presets.find((s: any) => s.id === selectedSketch)?.description}
+                  Loaded: {sketchConfig.presets.find((s) => s.id === selectedSketch)?.description}
                 </p>
               )}
             </div>
