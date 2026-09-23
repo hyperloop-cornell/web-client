@@ -47,6 +47,29 @@ npm run dev
 
 The application will be available at `http://localhost:5173`
 
+### Running without a backend (mock hubs)
+
+```bash
+npm run dev:mock
+```
+
+Serves fake hubs, ports and live telemetry from memory, so only the web client needs to run.
+Open the URL Vite prints (`http://localhost:4173`); **any username/password works**, or use
+"View Only Mode".
+
+| Hub            | State        | Ports (sensor auto-detected)                                  |
+| -------------- | ------------ | ------------------------------------------------------------- |
+| `hub-pit-01`   | Connected    | Uno (DHT22), Mega (MPU6050), Nano/CH340 (Voltage)             |
+| `hub-lab-02`   | Connected    | Uno (BME280), Leonardo (Current), Nano/CH340 (HC-SR04)        |
+| `hub-track-03` | Disconnected | none                                                          |
+
+Subscribing to a port streams generated readings into Live Telemetry. Restart, serial write,
+flash and close commands all complete (flash takes ~4s). State resets on page reload.
+
+To change the fake hubs or their sensor output, edit `src/mock/mockData.ts`. The mock (see
+`src/mock/mockBackend.ts`) only activates in the Vite dev server with `VITE_MOCK_HUBS=true`
+(set by `.env.mock`), so it cannot be switched on in a production build.
+
 Type checking and linting:
 ```bash
 npm run type-check

@@ -1,4 +1,5 @@
 import { getWebSocketUrl } from './api';
+import { MOCK_HUBS_ENABLED, createMockSocket } from '@/mock/mockBackend';
 import type {
   WebSocketMessage,
   SubscribeMessage,
@@ -46,7 +47,7 @@ class WebSocketService {
       const wsUrl = getWebSocketUrl(token);
       console.log('Connecting to WebSocket:', wsUrl);
       
-      this.ws = new WebSocket(wsUrl);
+      this.ws = MOCK_HUBS_ENABLED ? createMockSocket(wsUrl) : new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         console.log('WebSocket connected');

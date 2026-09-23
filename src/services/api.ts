@@ -9,6 +9,7 @@ import type {
   TelemetryEntry,
   TaskStatusResponse,
 } from '@/types';
+import { MOCK_HUBS_ENABLED, installMockAdapter } from '@/mock/mockBackend';
 
 interface WrappedListResponse<T> {
   ports?: T[];
@@ -84,6 +85,11 @@ const api: AxiosInstance = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// `npm run dev:mock`: serve hubs from memory instead of the network. Interceptors below still run.
+if (MOCK_HUBS_ENABLED) {
+  installMockAdapter(api);
+}
 
 // Request interceptor to add auth token
 api.interceptors.request.use(
