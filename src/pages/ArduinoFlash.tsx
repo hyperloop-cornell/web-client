@@ -1,19 +1,20 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useHubStore } from '@/stores/hubStore';
-import { useAuthStore } from '@/stores/authStore';
+import { useIsViewer } from '@/stores/authStore';
 import { hubsApi } from '@/services/api';
 import { commandService } from '@/services/commandService';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { AlertCircle, Upload, Play} from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, Upload, Play, XCircle } from 'lucide-react';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
 import { cpp } from '@codemirror/lang-cpp';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { fromByteArray, toByteArray } from 'base64-js';
 import sketches from '@/config/arduino-sketches.json';
-import type { PortInfo } from '@/types';
+import { BINARY_FORMATS, BOARDS, findBoard, formatFromFileName, hubFlashFormats } from '@/config/boards';
+import type { ArtifactFormat, BoardProfileInfo, PortInfo } from '@/types';
 
 interface SketchPreset {
   id: string;
@@ -26,112 +27,69 @@ interface SketchesConfig {
   presets: SketchPreset[];
 }
 
+type Firmware =
+  | { kind: 'text'; format: 'ino' | 'hex'; content: string; source: string }
+  | { kind: 'binary'; format: 'bin' | 'elf'; bytes: Uint8Array; source: string };
+
 const sketchConfig = sketches as SketchesConfig;
 
-function getApiErrorDetail(error: unknown): string | null {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'response' in error &&
-    typeof error.response === 'object' &&
-    error.response !== null &&
-    'data' in error.response &&
-    typeof error.response.data === 'object' &&
-    error.response.data !== null &&
-    'detail' in error.response.data &&
-    typeof error.response.data.detail === 'string'
-  ) {
-    return error.response.data.detail;
-  }
+const DETECTED = 'detected';
 
-  return null;
+// Intel HEX: every non-empty line is ':' followed by hex digits (same check as the hub)
+const isIntelHex = (text: string): boolean => {
+  const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  return lines.length > 0 && lines.every((line) => /^:[0-9A-Fa-f]{10,}$/.test(line.trim()));
+};
+
+function textFirmware(content: string, source: string): Firmware {
+  return { kind: 'text', format: isIntelHex(content) ? 'hex' : 'ino', content, source };
 }
 
-// Heuristic mapping from port info to likely board FQBN
-const inferBoardFqbn = (port?: PortInfo): string | undefined => {
-  if (!port) return undefined;
-
-  const desc = port.description?.toLowerCase() || '';
-  const manufacturer = port.manufacturer?.toLowerCase() || '';
-  const vid = port.vendor_id?.toLowerCase();
-  const pid = port.product_id?.toLowerCase();
-
-  const has = (text: string) => desc.includes(text) || manufacturer.includes(text);
-
-  // Arduino official VID
-  const isArduinoVid = vid === '2341';
-  // Common clone VID (CH340/CH341)
-  const isCh34x = vid === '1a86' || vid === '0403';
-  const looksLikeArduino = isArduinoVid || has('arduino');
-
-  // ESP32 VID and descriptors
-  const isEspressifVid = vid === '303a';
-  const looksLikeEsp32 = isEspressifVid || has('esp32');
-
-  // Arduino family heuristics
-  if (looksLikeArduino || isCh34x) {
-    if (desc.includes('mega') || pid === '0010' || pid === '0042') return 'arduino:avr:mega';
-    if (desc.includes('nano') || pid === '7523') return 'arduino:avr:nano';
-    return 'arduino:avr:uno';
-  }
-
-  // ESP32 family heuristics
-  if (looksLikeEsp32) {
-    return 'esp32:esp32:esp32';
-  }
-
-  // Fallback: inspect description keywords
-  if (desc.includes('uno')) return 'arduino:avr:uno';
-  if (desc.includes('mega')) return 'arduino:avr:mega';
-  if (desc.includes('nano')) return 'arduino:avr:nano';
-  if (desc.includes('esp32')) return 'esp32:esp32:esp32';
-
-  return undefined;
-};
-
-// Quick heuristic to detect Intel HEX content (lines starting with ':' and hex chars)
-const isProbablyIntelHex = (text: string): boolean => {
-  const lines = text.trim().split(/\r?\n/).filter(Boolean).slice(0, 6);
-  if (!lines.length) return false;
-  return lines.every((line) => line.startsWith(':') && /^:[0-9A-Fa-f]+$/.test(line.trim()));
-};
+function firmwareBase64(firmware: Firmware): string {
+  return fromByteArray(firmware.kind === 'binary' ? firmware.bytes : new TextEncoder().encode(firmware.content));
+}
 
 export function ArduinoFlash() {
   const [selectedSketch, setSelectedSketch] = useState<string>('');
-  const [fileContent, setFileContent] = useState<string>('');
+  const [firmware, setFirmware] = useState<Firmware | null>(null);
   const [selectedHub, setSelectedHub] = useState<string>('');
   const [selectedPort, setSelectedPort] = useState<string>('');
-  const [selectedBoard, setSelectedBoard] = useState<string>('');
+  const [selectedBoardId, setSelectedBoardId] = useState<string>(DETECTED);
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [isLoadingPorts, setIsLoadingPorts] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [lastTaskId, setLastTaskId] = useState<string | null>(null);
 
   const editorRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const applyingExternalChange = useRef(false);
 
-  const { hubs = [], fetchHubs } = useHubStore();
-  const { user } = useAuthStore();
-  const isViewOnly = user?.role === "viewer";
+  const { hubs = [], fetchHubs, tasks } = useHubStore();
+  const isViewOnly = useIsViewer();
 
-  // Fetch hubs on mount
   useEffect(() => {
     fetchHubs();
   }, [fetchHubs]);
 
-  // Initialize CodeMirror editor
+  // CodeMirror editor; edits flow back into the firmware state so what you see is what is flashed
   useEffect(() => {
     if (!editorRef.current) return;
 
-    const state = EditorState.create({
-      doc: '',
-      extensions: [
-        basicSetup,
-        cpp(),
-        oneDark,
-      ],
-    });
-
     editorViewRef.current = new EditorView({
-      state,
+      state: EditorState.create({
+        doc: '',
+        extensions: [
+          basicSetup,
+          cpp(),
+          oneDark,
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged || applyingExternalChange.current) return;
+            const content = update.state.doc.toString();
+            setFirmware(content.trim() ? textFirmware(content, 'Editor') : null);
+            setSelectedSketch('');
+          }),
+        ],
+      }),
       parent: editorRef.current,
     });
 
@@ -140,23 +98,19 @@ export function ArduinoFlash() {
     };
   }, []);
 
-  // Update editor content when it changes
+  // Show text firmware in the editor (binary images are not editable)
+  const editorText = firmware?.kind === 'text' ? firmware.content : '';
   useEffect(() => {
-    if (editorViewRef.current) {
-      const currentContent = editorViewRef.current.state.doc.toString();
-      if (currentContent !== fileContent) {
-        editorViewRef.current.dispatch({
-          changes: {
-            from: 0,
-            to: currentContent.length,
-            insert: fileContent,
-          },
-        });
-      }
+    const view = editorViewRef.current;
+    if (!view) return;
+    const current = view.state.doc.toString();
+    if (current !== editorText) {
+      applyingExternalChange.current = true;
+      view.dispatch({ changes: { from: 0, to: current.length, insert: editorText } });
+      applyingExternalChange.current = false;
     }
-  }, [fileContent]);
+  }, [editorText]);
 
-  // Fetch ports when hub selection changes
   useEffect(() => {
     if (!selectedHub) {
       setPorts([]);
@@ -166,9 +120,8 @@ export function ArduinoFlash() {
     const fetchPorts = async () => {
       setIsLoadingPorts(true);
       try {
-        const portsList = await hubsApi.getPorts(selectedHub);
-        setPorts(portsList);
-        setSelectedPort(''); // Reset port selection
+        setPorts(await hubsApi.getPorts(selectedHub));
+        setSelectedPort('');
       } catch (error) {
         console.error('Error fetching ports:', error);
         setPorts([]);
@@ -180,116 +133,119 @@ export function ArduinoFlash() {
     fetchPorts();
   }, [selectedHub]);
 
-  // Handle preset sketch selection
+  const hub = hubs.find((h) => h.hubId === selectedHub);
+  const port = ports.find((p) => p.port_id === selectedPort);
+  const detectedBoard = port?.board_profile ?? undefined;
+  const board: BoardProfileInfo | undefined =
+    selectedBoardId === DETECTED ? detectedBoard : findBoard(selectedBoardId);
+
+  const hubCapabilities = hub?.capabilities;
+  const allowedFormats: ArtifactFormat[] = useMemo(() => {
+    const hubFormats = hubFlashFormats(hubCapabilities);
+    const boardFormats = board?.artifacts?.length ? (board.artifacts as ArtifactFormat[]) : hubFormats;
+    return hubFormats.filter((f) => boardFormats.includes(f));
+  }, [board, hubCapabilities]);
+
+  const problem = (() => {
+    if (!firmware) return null;
+    if (!allowedFormats.includes(firmware.format)) {
+      const who = board ? board.name : 'This hub';
+      return `${who} cannot flash .${firmware.format} files (accepts ${allowedFormats.map((f) => `.${f}`).join(', ') || 'none'}).`;
+    }
+    if (firmware.format === 'ino' && !board?.fqbn) {
+      return 'Select the board type so the sketch can be compiled.';
+    }
+    return null;
+  })();
+
+  const lastTask = tasks.find((t) => t.task_id === lastTaskId);
+
   const handleSketchSelect = (sketchId: string) => {
-    setSelectedSketch(sketchId);
     const sketch = sketchConfig.presets.find((s) => s.id === sketchId);
-    if (sketch) {
-      try {
-        // Decode base64 to string
-        const decodedBytes = toByteArray(sketch.content);
-        const decodedString = String.fromCharCode(...decodedBytes);
-        setFileContent(decodedString);
-      } catch (error) {
-        console.error('Error decoding sketch:', error);
-      }
+    if (!sketch) return;
+    try {
+      const decoded = new TextDecoder().decode(toByteArray(sketch.content));
+      setSelectedSketch(sketchId);
+      setFirmware({ kind: 'text', format: 'ino', content: decoded, source: sketch.name });
+    } catch (error) {
+      console.error('Error decoding sketch:', error);
     }
   };
 
-  // Handle file upload
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
 
-    const ext = file.name.toLowerCase().split('.').pop();
-
-    // Require precompiled Intel HEX for now; guide users if they upload .ino
-    if (ext === 'ino') {
-      alert('Please compile the .ino to a .hex first (e.g., arduino-cli compile --fqbn <board> <sketch>), then upload the .hex.');
-      event.target.value = '';
-      return;
-    }
-
-    if (ext && ext !== 'hex') {
-      alert('Unsupported file type. Please upload a compiled .hex file.');
-      event.target.value = '';
+    const format = formatFromFileName(file.name);
+    if (!format) {
+      alert('Unsupported file type. Upload .ino source, or a compiled .hex, .bin or .elf image.');
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const content = (e.target?.result as string) || '';
-
-        // Validate Intel HEX structure to avoid sending bad payloads
-        if (!isProbablyIntelHex(content)) {
-          alert('This file does not look like a valid Intel HEX. Please upload the compiled .hex output.');
-          event.target.value = '';
+    reader.onload = () => {
+      if (BINARY_FORMATS.has(format)) {
+        const bytes = new Uint8Array(reader.result as ArrayBuffer);
+        setFirmware({ kind: 'binary', format: format as 'bin' | 'elf', bytes, source: file.name });
+      } else {
+        const content = String(reader.result ?? '');
+        if (format === 'hex' && !isIntelHex(content)) {
+          alert('This file does not look like valid Intel HEX.');
           return;
         }
-
-        setFileContent(content);
-        setSelectedSketch(''); // Clear preset selection when uploading
-      } catch (error) {
-        console.error('Error reading file:', error);
+        setFirmware({ kind: 'text', format: format as 'ino' | 'hex', content, source: file.name });
       }
+      setSelectedSketch('');
+      setSendError(null);
     };
-    reader.readAsText(file);
+    if (BINARY_FORMATS.has(format)) {
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.readAsText(file);
+    }
   };
 
-  // Handle flash button click
   const handleFlash = async () => {
-    if (!selectedHub || !selectedPort || !fileContent) {
-      alert('Please select a hub, port, and ensure code is loaded');
-      return;
-    }
+    if (!selectedHub || !selectedPort || !firmware || problem) return;
+    setSendError(null);
 
-    // Determine board FQBN: user selection wins; otherwise infer from port metadata
-    const selectedPortInfo = ports.find((p) => p.port_id === selectedPort);
-    const inferredBoard = inferBoardFqbn(selectedPortInfo);
-    const boardFqbn = selectedBoard && selectedBoard !== 'auto' ? selectedBoard : inferredBoard;
+    const result = await commandService.flash(
+      selectedHub,
+      selectedPort,
+      {
+        firmwareData: firmwareBase64(firmware),
+        artifactFormat: firmware.format,
+        boardFqbn: board?.fqbn ?? undefined,
+        boardProfile: selectedBoardId === DETECTED ? undefined : selectedBoardId,
+      },
+      { showSuccessToast: false, showErrorToast: false }
+    );
 
-    // For .ino files, board FQBN is required for compilation
-    const isInoSource = !isProbablyIntelHex(fileContent);
-    if (isInoSource && !boardFqbn) {
-      alert('Please select a board type for compiling the Arduino sketch');
-      return;
-    }
-
-    try {
-      // Convert file content to base64
-      const bytes = new TextEncoder().encode(fileContent);
-      const base64Content = fromByteArray(bytes);
-
-      // Initiate flash command
-      await commandService.flash(
-        selectedHub,
-        selectedPort,
-        { firmwareData: base64Content, boardFqbn },
-        { showSuccessToast: false, showErrorToast: false }
-      );
-
-      alert(isInoSource ? 'Sketch will be compiled and flashed on the hub!' : 'Flash command sent successfully!');
-    } catch (error: unknown) {
-      console.error('Error starting flash:', error);
-      alert(`Failed to start flash process: ${getApiErrorDetail(error) || 'Unknown error'}`);
+    if (result.success) {
+      setLastTaskId(result.taskId);
+    } else {
+      setSendError(result.error ?? 'Failed to start flashing');
     }
   };
+
+  const flashing = lastTask && (lastTask.status === 'pending' || lastTask.status === 'running');
 
   return (
     <div className="space-y-4 sm:space-y-6">
       <div className="mb-6 sm:mb-8">
-        <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-2">Arduino Firmware Flash</h1>
-        <p className="text-sm sm:text-base text-muted-foreground">Upload and flash Arduino sketches to your devices</p>
+        <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-2">Firmware Flash</h1>
+        <p className="text-sm sm:text-base text-muted-foreground">
+          Flash Arduino (Uno R3, Mega, Nano, Uno R4) and STM32 boards through their hub
+        </p>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 xl:gap-6">
         {/* Code Editor Panel */}
         <div className="xl:col-span-2 space-y-4">
           <Card className="p-4 sm:p-6">
-            <h2 className="text-base sm:text-lg font-semibold mb-4">Code Editor</h2>
+            <h2 className="text-base sm:text-lg font-semibold mb-4">Firmware</h2>
 
-            {/* File Selector */}
             <div className="mb-4 space-y-2">
               <label className="text-sm font-medium">Load Sketch</label>
               <div className="flex flex-col sm:flex-row gap-2">
@@ -313,23 +269,24 @@ export function ArduinoFlash() {
                       Upload File
                     </span>
                   </Button>
-                  <input
-                    type="file"
-                    accept=".ino,.hex"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
+                  <input type="file" accept=".ino,.hex,.bin,.elf" onChange={handleFileUpload} className="hidden" />
                 </label>
               </div>
 
-              {selectedSketch && (
+              {firmware && (
                 <p className="text-xs text-muted-foreground">
-                  Loaded: {sketchConfig.presets.find((s) => s.id === selectedSketch)?.description}
+                  Loaded: {firmware.source} (.{firmware.format}
+                  {firmware.kind === 'binary' ? `, ${firmware.bytes.length.toLocaleString()} bytes` : ''})
                 </p>
               )}
             </div>
 
-            {/* CodeMirror Editor */}
+            {firmware?.kind === 'binary' && (
+              <div className="mb-2 p-3 bg-muted/40 border border-border rounded text-xs text-muted-foreground">
+                Binary image loaded; it is flashed as-is. Type or load a sketch in the editor to replace it.
+              </div>
+            )}
+
             <div className="border border-border rounded-lg overflow-hidden">
               <div
                 ref={editorRef}
@@ -337,9 +294,9 @@ export function ArduinoFlash() {
               />
             </div>
 
-            {fileContent && (
+            {firmware?.kind === 'text' && (
               <div className="mt-2 text-xs text-muted-foreground">
-                {fileContent.split('\n').length} lines • {fileContent.length} characters
+                {firmware.content.split('\n').length} lines &middot; {firmware.content.length} characters
               </div>
             )}
           </Card>
@@ -347,12 +304,10 @@ export function ArduinoFlash() {
 
         {/* Control Panel */}
         <div className="space-y-4">
-          {/* Hub & Port Selection */}
           <Card className="p-4 sm:p-6">
             <h2 className="text-base sm:text-lg font-semibold mb-4">Target Device</h2>
 
-            <div className="space-y-4 overflow-y-auto max-h-96 pr-2 scrollbar-hide" style={{ scrollbarWidth: 'none' }}>
-              {/* Hub Selector */}
+            <div className="space-y-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Hub</label>
                 <Select value={selectedHub} onValueChange={setSelectedHub}>
@@ -360,71 +315,112 @@ export function ArduinoFlash() {
                     <SelectValue placeholder="Select hub..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {hubs.map((hub) => (
-                      <SelectItem key={hub.hubId} value={hub.hubId}>
-                        {hub.hubId}
-                      </SelectItem>
-                    ))}
+                    {hubs
+                      .filter((h) => h.connected)
+                      .map((h) => (
+                        <SelectItem key={h.hubId} value={h.hubId}>
+                          {h.hubId}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* Port Selector */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">Port</label>
                 <Select value={selectedPort} onValueChange={setSelectedPort} disabled={isLoadingPorts || !selectedHub}>
                   <SelectTrigger>
-                    <SelectValue placeholder={isLoadingPorts ? "Loading ports..." : "Select port..."} />
+                    <SelectValue placeholder={isLoadingPorts ? 'Loading ports...' : 'Select port...'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {ports.map((port) => (
-                      <SelectItem key={port.port_id} value={port.port_id}>
-                        {port.description || port.port}
+                    {ports.map((p) => (
+                      <SelectItem key={p.port_id} value={p.port_id}>
+                        {p.board_profile?.name || p.description || p.port}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* Board Selector */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Board (Optional)</label>
-                <Select value={selectedBoard} onValueChange={setSelectedBoard}>
+                <label className="text-sm font-medium">Board</label>
+                <Select value={selectedBoardId} onValueChange={setSelectedBoardId}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Auto-detect..." />
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="auto">Auto-detect</SelectItem>
-                    <SelectItem value="arduino:avr:uno">Arduino Uno</SelectItem>
-                    <SelectItem value="arduino:avr:mega">Arduino Mega</SelectItem>
-                    <SelectItem value="arduino:avr:nano">Arduino Nano</SelectItem>
-                    <SelectItem value="esp32:esp32:esp32">ESP32 (Default)</SelectItem>
-                    <SelectItem value="esp32:esp32:esp32wrover">ESP32 Wrover</SelectItem>
+                    <SelectItem value={DETECTED}>
+                      {detectedBoard ? `Detected: ${detectedBoard.name}` : 'Detected by hub (unknown)'}
+                    </SelectItem>
+                    {BOARDS.map((b) => (
+                      <SelectItem key={b.id} value={b.id}>
+                        {b.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+                {selectedPort && (
+                  <p className="text-xs text-muted-foreground">
+                    Accepts: {allowedFormats.map((f) => `.${f}`).join(', ') || 'nothing on this hub'}
+                    {hub && !hub.profile && ' (older hub software)'}
+                  </p>
+                )}
               </div>
 
-              {/* Info Box */}
-              {selectedPort && (
-                <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded text-xs text-blue-700 dark:text-blue-400 flex gap-2">
+              {firmware && problem && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-700 dark:text-amber-400 flex gap-2">
                   <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <span>Board will be auto-detected during flash.</span>
+                  <span>{problem}</span>
                 </div>
               )}
             </div>
           </Card>
 
-          {/* Flash Button */}
           <Button
             onClick={handleFlash}
-            disabled={!selectedHub || !selectedPort || !fileContent || isViewOnly}
+            disabled={!selectedHub || !selectedPort || !firmware || !!problem || isViewOnly || !!flashing}
             className="w-full gap-2 h-10"
             size="lg"
-            title={isViewOnly ? "View-only mode does not allow flashing" : ""}
+            title={isViewOnly ? 'View-only mode does not allow flashing' : ''}
           >
-            <Play className="h-4 w-4" />
-            {isViewOnly ? "Read-Only Mode" : "Flash"}
+            {flashing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {isViewOnly ? 'Read-Only Mode' : flashing ? 'Flashing...' : 'Flash'}
           </Button>
+
+          {sendError && (
+            <div className="p-3 bg-destructive/10 border border-destructive/30 rounded text-xs text-destructive flex gap-2">
+              <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <span>{sendError}</span>
+            </div>
+          )}
+
+          {lastTask && (
+            <div
+              className={`p-3 rounded text-xs flex gap-2 border ${
+                lastTask.status === 'completed'
+                  ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-400'
+                  : lastTask.status === 'failed' || lastTask.status === 'cancelled'
+                    ? 'bg-destructive/10 border-destructive/30 text-destructive'
+                    : 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-400'
+              }`}
+            >
+              {lastTask.status === 'completed' ? (
+                <CheckCircle2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              ) : lastTask.status === 'failed' || lastTask.status === 'cancelled' ? (
+                <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              ) : (
+                <Loader2 className="h-4 w-4 mt-0.5 flex-shrink-0 animate-spin" />
+              )}
+              <span className="break-words">
+                {lastTask.status === 'completed' && 'Flash completed.'}
+                {lastTask.status === 'pending' && 'Queued on the hub...'}
+                {lastTask.status === 'running' &&
+                  (firmware?.format === 'ino' ? 'Compiling and flashing on the hub...' : 'Flashing...')}
+                {(lastTask.status === 'failed' || lastTask.status === 'cancelled') &&
+                  `Flash failed: ${lastTask.error ?? 'unknown error'}`}
+              </span>
+            </div>
+          )}
 
           {isViewOnly && (
             <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-700 dark:text-amber-400 flex gap-2">
@@ -435,14 +431,14 @@ export function ArduinoFlash() {
         </div>
       </div>
 
-      {/* Helpful tips section */}
       <Card className="p-4 bg-muted/40 border-dashed">
         <div className="space-y-2 text-sm text-muted-foreground">
           <div className="font-semibold text-foreground">Tips</div>
           <ul className="list-disc list-inside space-y-1">
-            <li>Upload .ino files directly - they will be compiled on the RPI hub using Arduino CLI.</li>
-            <li>You can also upload pre-compiled .hex files for faster flashing.</li>
-            <li>Flash hangs? Serial write stops working? Unplug and re-plug the board, then try again.</li>
+            <li>.ino sketches are compiled on the hub with arduino-cli; the board type decides how.</li>
+            <li>Precompiled images flash faster: .hex for AVR boards, .bin for the Uno R4, .bin/.elf/.hex for STM32.</li>
+            <li>Compiling for STM32 on a Pi can take several minutes the first time.</li>
+            <li>Flash hangs? Unplug and re-plug the board, then try again.</li>
           </ul>
         </div>
       </Card>

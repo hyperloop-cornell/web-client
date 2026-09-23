@@ -26,7 +26,7 @@ export function Login() {
     clearError();
     try {
       await loginViewer();
-    } catch (error) {
+    } catch {
       // Error is handled by the store
     }
   };
@@ -41,17 +41,20 @@ export function Login() {
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold">Sign in</CardTitle>
           <CardDescription>
-            Enter your credentials to access the hub management dashboard
+            Sign in with your NetID and the team password
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">NetID</Label>
               <Input
                 id="username"
                 type="text"
-                placeholder="Enter your username"
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder="e.g. abc123"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
@@ -59,11 +62,12 @@ export function Login() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">Team password</Label>
               <Input
                 id="password"
                 type="password"
-                placeholder="Enter your password"
+                autoComplete="current-password"
+                placeholder="Team password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -92,7 +96,7 @@ export function Login() {
               {isLoading ? 'Loading...' : 'View Only Mode'}
             </Button>
             <p className="text-xs text-muted-foreground text-center">
-              View-only mode allows you to browse all pages but cannot flash firmware
+              View-only mode shows every page but cannot send commands (write, restart, close, flash)
             </p>
           </div>
         </CardContent>

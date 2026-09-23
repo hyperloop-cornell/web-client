@@ -12,18 +12,29 @@ type OutboundWebSocketMessage = SubscribeMessage | UnsubscribeMessage | PongMess
 
 type MessageHandler = (message: WebSocketMessage) => void;
 
+function subscriptionKey(sub: DeviceSubscription): string {
+  return `${sub.hubId}:${sub.portId}`;
+}
+
+/**
+ * Browser connection to the cloud's /ws/client endpoint.
+ *
+ * The cloud keeps subscriptions per connection, so this service remembers what the user asked
+ * for and re-sends it after every reconnect. It reconnects indefinitely with capped exponential
+ * backoff, and immediately when the tab becomes visible again.
+ */
 class WebSocketService {
   private ws: WebSocket | null = null;
   private reconnectTimeout: number | null = null;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
-  private baseReconnectDelay = 1000; // 1 second
+  private readonly baseReconnectDelay = 1000; // 1 second
+  private readonly maxReconnectDelay = 30000; // 30 seconds
   private messageHandlers: Set<MessageHandler> = new Set();
   private isIntentionallyClosed = false;
   private token: string | null = null;
 
-  // Queue subscriptions requested while the socket is not yet open
-  private pendingSubscriptions: DeviceSubscription[] = [];
+  // Everything the user is subscribed to, keyed by hubId:portId (re-sent on reconnect)
+  private subscriptions = new Map<string, DeviceSubscription>();
 
   // Heartbeat monitoring to detect dead connections
   private lastMessageTime: number = 0;
@@ -31,46 +42,49 @@ class WebSocketService {
   private readonly HEARTBEAT_CHECK_INTERVAL = 10000; // Check every 10 seconds
   private readonly MAX_MESSAGE_AGE = 65000; // Reconnect if no message for 65 seconds (2x ping interval + buffer)
 
+  constructor() {
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && !this.isConnected() && this.token && !this.isIntentionallyClosed) {
+          this.reconnectAttempts = 0;
+          this.connect(this.token);
+        }
+      });
+    }
+  }
+
   /**
    * Connect to the WebSocket server
    */
   connect(token: string): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log('WebSocket already connected');
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
     this.token = token;
     this.isIntentionallyClosed = false;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
 
     try {
       const wsUrl = getWebSocketUrl(token);
-      console.log('Connecting to WebSocket:', wsUrl);
-      
-      this.ws = MOCK_HUBS_ENABLED ? createMockSocket(wsUrl) : new WebSocket(wsUrl);
+      const socket = MOCK_HUBS_ENABLED ? createMockSocket(wsUrl) : new WebSocket(wsUrl);
+      this.ws = socket;
 
-      this.ws.onopen = () => {
-        console.log('WebSocket connected');
+      socket.onopen = () => {
         this.reconnectAttempts = 0;
         this.lastMessageTime = Date.now();
-
-        // Start heartbeat monitoring
         this.startHeartbeatMonitoring();
 
-        // Flush any pending subscriptions that were queued while connecting
-        if (this.pendingSubscriptions.length > 0) {
-          console.log(`Flushing ${this.pendingSubscriptions.length} pending subscription(s)`);
-          const message: SubscribeMessage = {
-            type: 'subscribe',
-            subscriptions: [...this.pendingSubscriptions],
-          };
-          // Clear before send to avoid re-queue on failure
-          this.pendingSubscriptions = [];
-          this.send(message);
+        // The server forgets subscriptions when a connection ends: restore all of them
+        if (this.subscriptions.size > 0) {
+          this.send({ type: 'subscribe', subscriptions: Array.from(this.subscriptions.values()) });
         }
       };
 
-      this.ws.onmessage = (event: MessageEvent) => {
+      socket.onmessage = (event: MessageEvent) => {
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
           this.handleMessage(message);
@@ -79,11 +93,12 @@ class WebSocketService {
         }
       };
 
-      this.ws.onerror = (error: Event) => {
+      socket.onerror = (error: Event) => {
         console.error('WebSocket error:', error);
       };
 
-      this.ws.onclose = (event: CloseEvent) => {
+      socket.onclose = (event: CloseEvent) => {
+        if (this.ws !== socket) return; // a newer connection replaced this one
         console.log('WebSocket closed:', event.code, event.reason);
         this.ws = null;
         this.stopHeartbeatMonitoring();
@@ -99,11 +114,13 @@ class WebSocketService {
   }
 
   /**
-   * Disconnect from the WebSocket server
+   * Disconnect from the WebSocket server (logout)
    */
   disconnect(): void {
     this.isIntentionallyClosed = true;
-    
+    this.token = null;
+    this.subscriptions.clear();
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
@@ -112,8 +129,9 @@ class WebSocketService {
     this.stopHeartbeatMonitoring();
 
     if (this.ws) {
-      this.ws.close();
+      const socket = this.ws;
       this.ws = null;
+      socket.close();
     }
   }
 
@@ -123,52 +141,26 @@ class WebSocketService {
   subscribe(hubId: string, portId: string): void;
   subscribe(subscriptions: DeviceSubscription[]): void;
   subscribe(arg1: string | DeviceSubscription[], arg2?: string): void {
-    let subscriptions: DeviceSubscription[] | null = null;
-
-    if (typeof arg1 === 'string' && arg2) {
-      subscriptions = [{ hubId: arg1, portId: arg2 }];
-    } else if (Array.isArray(arg1)) {
-      subscriptions = arg1;
-    } else {
+    const requested = typeof arg1 === 'string' && arg2 ? [{ hubId: arg1, portId: arg2 }] : Array.isArray(arg1) ? arg1 : null;
+    if (!requested) {
       console.error('Invalid subscribe arguments');
       return;
     }
 
-    // If socket isn't ready, queue subscriptions and attempt to connect
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not connected; queuing subscription and attempting connect');
+    for (const sub of requested) {
+      this.subscriptions.set(subscriptionKey(sub), { hubId: sub.hubId, portId: sub.portId });
+    }
 
-      // Dedupe queued subscriptions to avoid duplicates from multiple clicks
-      for (const sub of subscriptions) {
-        const exists = this.pendingSubscriptions.some(
-          (s) => s.hubId === sub.hubId && s.portId === sub.portId
-        );
-        if (!exists) {
-          this.pendingSubscriptions.push(sub);
-        } else {
-          console.log('Subscription already queued:', sub);
-        }
-      }
-
-      // Try to connect using stored token (fallback to localStorage)
-      const token = this.token || localStorage.getItem('auth_token');
-      if (token) {
-        try {
-          this.connect(token);
-        } catch (e) {
-          console.error('Failed to initiate WebSocket connect while queuing subscription:', e);
-        }
-      }
-
+    if (this.isConnected()) {
+      this.send({ type: 'subscribe', subscriptions: requested });
       return;
     }
 
-    const message: SubscribeMessage = {
-      type: 'subscribe',
-      subscriptions,
-    };
-
-    this.send(message);
+    // Sent from onopen once connected
+    const token = this.token || localStorage.getItem('auth_token');
+    if (token) {
+      this.connect(token);
+    }
   }
 
   /**
@@ -177,32 +169,19 @@ class WebSocketService {
   unsubscribe(hubId: string, portId: string): void;
   unsubscribe(subscriptions: DeviceSubscription[]): void;
   unsubscribe(arg1: string | DeviceSubscription[], arg2?: string): void {
-    let subscriptions: DeviceSubscription[] | null = null;
-    if (typeof arg1 === 'string' && arg2) {
-      subscriptions = [{ hubId: arg1, portId: arg2 }];
-    } else if (Array.isArray(arg1)) {
-      subscriptions = arg1;
-    } else {
+    const requested = typeof arg1 === 'string' && arg2 ? [{ hubId: arg1, portId: arg2 }] : Array.isArray(arg1) ? arg1 : null;
+    if (!requested) {
       console.error('Invalid unsubscribe arguments');
       return;
     }
 
-    // If we have queued subscriptions, remove matching ones from queue
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.pendingSubscriptions = this.pendingSubscriptions.filter(
-        (s) => !subscriptions!.some((u) => u.hubId === s.hubId && u.portId === s.portId)
-      );
-
-      console.warn('WebSocket not connected; removed matching subscriptions from queue');
-      return;
+    for (const sub of requested) {
+      this.subscriptions.delete(subscriptionKey(sub));
     }
 
-    const message: UnsubscribeMessage = {
-      type: 'unsubscribe',
-      subscriptions,
-    };
-
-    this.send(message);
+    if (this.isConnected()) {
+      this.send({ type: 'unsubscribe', subscriptions: requested });
+    }
   }
 
   /**
@@ -210,44 +189,25 @@ class WebSocketService {
    */
   onMessage(handler: MessageHandler): () => void {
     this.messageHandlers.add(handler);
-    
-    // Return unsubscribe function
     return () => {
       this.messageHandlers.delete(handler);
     };
   }
 
-  /**
-   * Send a message to the WebSocket server
-   */
   private send(message: OutboundWebSocketMessage): void {
-    console.log('Sending WebSocket message:', message);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
-    } else {
-      console.error('WebSocket not connected, cannot send message');
     }
   }
 
-  /**
-   * Handle incoming WebSocket messages
-   */
   private handleMessage(message: WebSocketMessage): void {
-    // Update last message time for heartbeat monitoring
     this.lastMessageTime = Date.now();
 
-    // Handle ping messages by responding with pong
     if (message.type === 'ping') {
-      const pongMessage: PongMessage = {
-        type: 'pong',
-        timestamp: new Date().toISOString(),
-      };
-      this.send(pongMessage);
-      console.log('Received ping, sent pong');
+      this.send({ type: 'pong', timestamp: new Date().toISOString() });
       return; // Don't pass ping messages to handlers
     }
 
-    console.log('Received WebSocket message:', message);
     this.messageHandlers.forEach((handler) => {
       try {
         handler(message);
@@ -258,58 +218,41 @@ class WebSocketService {
   }
 
   /**
-   * Schedule a reconnection attempt with exponential backoff
+   * Schedule a reconnection attempt with capped exponential backoff (never gives up)
    */
   private scheduleReconnect(): void {
-    if (this.isIntentionallyClosed) {
+    if (this.isIntentionallyClosed || this.reconnectTimeout) {
       return;
     }
 
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnection attempts reached');
-      return;
-    }
-
-    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s...
-    const delay = Math.min(
-      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts),
-      30000 // Max 30 seconds
-    );
-
-    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
-
+    const delay = Math.min(this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay);
     this.reconnectAttempts++;
+    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+
     this.reconnectTimeout = window.setTimeout(() => {
+      this.reconnectTimeout = null;
       if (this.token) {
         this.connect(this.token);
       }
     }, delay);
   }
 
-  /**
-   * Start heartbeat monitoring to detect dead connections
-   */
   private startHeartbeatMonitoring(): void {
-    this.stopHeartbeatMonitoring(); // Clear any existing interval
-    
+    this.stopHeartbeatMonitoring();
+
     this.heartbeatInterval = window.setInterval(() => {
-      const now = Date.now();
-      const timeSinceLastMessage = now - this.lastMessageTime;
-      
+      const timeSinceLastMessage = Date.now() - this.lastMessageTime;
+
       if (timeSinceLastMessage > this.MAX_MESSAGE_AGE) {
         console.warn(
-          `No messages received for ${Math.round(timeSinceLastMessage / 1000)}s. ` +
-          'Connection may be dead. Forcing reconnect...'
+          `No messages received for ${Math.round(timeSinceLastMessage / 1000)}s. Connection may be dead. Forcing reconnect...`
         );
-        
-        // Force close and reconnect
-        if (this.ws) {
-          this.ws.close();
-          this.ws = null;
-        }
-        
+
+        const socket = this.ws;
+        this.ws = null;
         this.stopHeartbeatMonitoring();
-        
+        socket?.close();
+
         if (!this.isIntentionallyClosed && this.token) {
           this.scheduleReconnect();
         }
@@ -317,9 +260,6 @@ class WebSocketService {
     }, this.HEARTBEAT_CHECK_INTERVAL);
   }
 
-  /**
-   * Stop heartbeat monitoring
-   */
   private stopHeartbeatMonitoring(): void {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
@@ -327,19 +267,16 @@ class WebSocketService {
     }
   }
 
-  /**
-   * Get connection status
-   */
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
   hasPendingSubscription(hubId: string, portId: string): boolean {
-    return this.pendingSubscriptions.some((s) => s.hubId === hubId && s.portId === portId);
+    return !this.isConnected() && this.subscriptions.has(subscriptionKey({ hubId, portId }));
   }
 
   getPendingSubscriptions(): DeviceSubscription[] {
-    return [...this.pendingSubscriptions];
+    return this.isConnected() ? [] : Array.from(this.subscriptions.values());
   }
 }
 
