@@ -7,7 +7,7 @@ import { webSocketService } from '@/services/websocket';
 import { Button } from '@/components/ui/button';
 import { LayoutDashboard, Layers, Activity, LogOut, Zap, Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import loopIcon from '@/assets/loopIcon.png';
-import type { WebSocketMessage } from '@/types';
+import { toTaskState, type WebSocketMessage } from '@/types';
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -57,10 +57,15 @@ export function MainLayout({ children }: MainLayoutProps) {
           const hubStore = useHubStore.getState();
           hubStore.updateTaskStatus({
             task_id: message.task_id,
-            status: message.status,
-            result: message.result,
+            status: toTaskState(message.status),
+            result: message.result ?? undefined,
             error: message.error,
           });
+        } else if (message?.type === 'health') {
+          useHubStore.getState().updateHealth(message.hubId, message);
+        } else if (message?.type === 'hub_status') {
+          // A hub came online or went offline: refresh the hub list
+          void useHubStore.getState().fetchHubs();
         } else if (message?.type === 'device_event') {
           // Handle device disconnect events by auto-unsubscribing
           if (message.event === 'disconnected') {

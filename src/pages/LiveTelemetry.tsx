@@ -481,7 +481,7 @@ export function LiveTelemetry() {
                               >
                                 <DeviceChart
                                   data={chartData!}
-                                  dragHandleProps={provided.dragHandleProps}
+                                  dragHandleProps={provided.dragHandleProps ?? undefined}
                                   onSeparate={handleSeparateChart}
                                   isDragOver={isDropTarget && shiftPressed}
                                 />

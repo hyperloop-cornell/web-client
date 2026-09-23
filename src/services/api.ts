@@ -1,44 +1,21 @@
 import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import type {
   AuthToken,
-  LoginCredentials,
-  User,
-  HubInfo,
-  PortInfo,
   ConnectionInfo,
-  TelemetryEntry,
+  ConnectionListResponse,
+  FlashFirmwareRequest,
+  HubInfo,
+  LoginCredentials,
+  PortInfo,
+  PortListResponse,
   TaskStatusResponse,
+  TelemetryEntry,
+  TelemetryListResponse,
+  User,
 } from '@/types';
-import { MOCK_HUBS_ENABLED, installMockAdapter } from '@/mock/mockBackend';
+import { MOCK_HUBS_ENABLED, installMockAdapter } from '@/mock';
 
-interface WrappedListResponse<T> {
-  ports?: T[];
-  connections?: T[];
-  telemetry?: T[];
-}
-
-interface FlashCommandPayload {
-  portId: string;
-  firmwareData: string;
-  priority?: number;
-  boardFqbn?: string;
-}
-
-interface CloseConnectionResponseBody {
-  commandId: string;
-  hubId: string;
-  status: string;
-  message: string;
-}
-
-function extractListResponse<T>(data: T[] | WrappedListResponse<T>, key: keyof WrappedListResponse<T>): T[] {
-  if (Array.isArray(data)) {
-    return data;
-  }
-
-  const value = data[key];
-  return Array.isArray(value) ? value : [];
-}
+export type FlashCommandPayload = Omit<FlashFirmwareRequest, 'portId'>;
 
 function isLocalHostname(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
@@ -158,93 +135,49 @@ export const hubsApi = {
   },
 
   getPorts: async (hubId: string): Promise<PortInfo[]> => {
-    const response = await api.get<PortInfo[] | WrappedListResponse<PortInfo>>(`/api/hubs/${hubId}/ports`);
-    return extractListResponse(response.data, 'ports');
+    const response = await api.get<PortListResponse>(`/api/hubs/${hubId}/ports`);
+    return response.data.ports;
   },
 
   getConnections: async (hubId: string): Promise<ConnectionInfo[]> => {
-    const response = await api.get<ConnectionInfo[] | WrappedListResponse<ConnectionInfo>>(`/api/hubs/${hubId}/connections`);
-    return extractListResponse(response.data, 'connections');
+    const response = await api.get<ConnectionListResponse>(`/api/hubs/${hubId}/connections`);
+    return response.data.connections;
   },
 
   getTelemetry: async (hubId: string, limit?: number): Promise<TelemetryEntry[]> => {
-    const response = await api.get<TelemetryEntry[] | WrappedListResponse<TelemetryEntry>>(
-      `/api/hubs/${hubId}/telemetry`,
-      {
-        params: { limit },
-      }
-    );
-    return extractListResponse(response.data, 'telemetry');
+    const response = await api.get<TelemetryListResponse>(`/api/hubs/${hubId}/telemetry`, {
+      params: { limit },
+    });
+    return response.data.telemetry;
   },
 
-  sendSerialWrite: async (
-    hubId: string,
-    portId: string,
-    data: string,
-    priority?: number
-  ): Promise<TaskStatusResponse> => {
-    const response = await api.post<TaskStatusResponse>(
-      `/api/hubs/${hubId}/commands/write`,
-      {
-        portId: portId,
-        data,
-        priority,
-      }
-    );
-    return response.data;
-  },
-
-  sendFlashCommand: async (
-    hubId: string,
-    portId: string,
-    firmwareData: string,
-    priority?: number,
-    boardFqbn?: string
-  ): Promise<TaskStatusResponse> => {
-    const payload: FlashCommandPayload = {
-      portId: portId,
-      firmwareData,
+  sendSerialWrite: async (hubId: string, portId: string, data: string, priority?: number): Promise<TaskStatusResponse> => {
+    const response = await api.post<TaskStatusResponse>(`/api/hubs/${hubId}/commands/write`, {
+      portId,
+      data,
       priority,
-    };
-
-    if (boardFqbn) {
-      payload.boardFqbn = boardFqbn;
-    }
-
-    const response = await api.post<TaskStatusResponse>(
-      `/api/hubs/${hubId}/commands/flash`,
-      payload
-    );
+    });
     return response.data;
   },
 
-  sendRestartCommand: async (
-    hubId: string,
-    portId: string,
-    priority?: number
-  ): Promise<TaskStatusResponse> => {
-    const response = await api.post<TaskStatusResponse>(
-      `/api/hubs/${hubId}/commands/restart`,
-      {
-        portId: portId,
-        priority,
-      }
-    );
+  sendFlashCommand: async (hubId: string, portId: string, payload: FlashCommandPayload): Promise<TaskStatusResponse> => {
+    const response = await api.post<TaskStatusResponse>(`/api/hubs/${hubId}/commands/flash`, { portId, ...payload });
     return response.data;
   },
 
-  closeConnection: async (
-    hubId: string,
-    portId: string,
-    priority?: number
-  ): Promise<CloseConnectionResponseBody> => {
-    const response = await api.post<CloseConnectionResponseBody>(
-      `/api/hubs/${hubId}/commands/close`,
-      {
-        portId,
-        priority: priority ?? 1,
-      }
-    );
+  sendRestartCommand: async (hubId: string, portId: string, priority?: number): Promise<TaskStatusResponse> => {
+    const response = await api.post<TaskStatusResponse>(`/api/hubs/${hubId}/commands/restart`, {
+      portId,
+      priority,
+    });
+    return response.data;
+  },
+
+  closeConnection: async (hubId: string, portId: string, priority?: number): Promise<TaskStatusResponse> => {
+    const response = await api.post<TaskStatusResponse>(`/api/hubs/${hubId}/commands/close`, {
+      portId,
+      priority: priority ?? 1,
+    });
     return response.data;
   },
 };

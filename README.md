@@ -47,28 +47,49 @@ npm run dev
 
 The application will be available at `http://localhost:5173`
 
-### Running without a backend (mock hubs)
+### Running without a backend
+
+Two levels, depending on what you are working on:
+
+**Browser-only mock (UI work):**
 
 ```bash
 npm run dev:mock
 ```
 
-Serves fake hubs, ports and live telemetry from memory, so only the web client needs to run.
-Open the URL Vite prints (`http://localhost:4173`); **any username/password works**, or use
-"View Only Mode".
+Serves hubs, ports, live telemetry and command lifecycles from memory, so only the web client runs.
+Open the URL Vite prints (`http://localhost:4173`) and log in with any NetID and the password
+`hyperloop-dev` (the same development password cloud-services uses), or use "View Only Mode".
 
-| Hub            | State        | Ports (sensor auto-detected)                                  |
-| -------------- | ------------ | ------------------------------------------------------------- |
-| `hub-pit-01`   | Connected    | Uno (DHT22), Mega (MPU6050), Nano/CH340 (Voltage)             |
-| `hub-lab-02`   | Connected    | Uno (BME280), Leonardo (Current), Nano/CH340 (HC-SR04)        |
-| `hub-track-03` | Disconnected | none                                                          |
+| Hub | State | Ports |
+| --- | --- | --- |
+| `lab-hub-01` | Connected, current hub | Uno R3, Uno R4 Minima, STM32F407G-DISC1 |
+| `cellular-hub` | Connected on cellular | Mega 2560, Nano (CH340) |
+| `rpi-bridge-01` | Connected, older hub (no capabilities; `.ino`/`.hex` only) | CH340 serial |
+| `rpi-bridge-02` | Offline | none |
 
-Subscribing to a port streams generated readings into Live Telemetry. Restart, serial write,
-flash and close commands all complete (flash takes ~4s). State resets on page reload.
+Commands behave like a real hub: tasks go pending, running, then completed or failed, with the same
+errors (closed port, firmware format the board cannot take, missing FQBN). View-only sessions get 403
+on every command, as with the real cloud. Fixtures live in `src/mock/fixtures.ts`; the mock only
+activates in the Vite dev server with `VITE_MOCK_HUBS=true` (set by `.env.mock`), never in a
+production build.
 
-To change the fake hubs or their sensor output, edit `src/mock/mockData.ts`. The mock (see
-`src/mock/mockBackend.ts`) only activates in the Vite dev server with `VITE_MOCK_HUBS=true`
-(set by `.env.mock`), so it cannot be switched on in a production build.
+**Full stack with simulated hubs (protocol and end-to-end work):**
+
+Run cloud-services locally and one or more hubs with rpi-hub-server's `dev-sim` profile (see those
+READMEs), then `npm run dev`. Everything goes through the real cloud and hub code.
+
+### API types
+
+`src/types/api.gen.ts` is generated from `cloud-services/contracts/openapi.json` (REST and WebSocket
+message schemas). After changing the cloud contract:
+
+```bash
+npm run gen:types
+```
+
+Do not edit the generated file; `src/types/index.ts` re-exports what the app uses. The mock is
+typed against these types, so contract changes that the mock does not follow fail type checking.
 
 Type checking and linting:
 ```bash

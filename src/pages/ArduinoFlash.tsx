@@ -265,9 +265,7 @@ export function ArduinoFlash() {
       await commandService.flash(
         selectedHub,
         selectedPort,
-        base64Content,
-        boardFqbn,
-        undefined,
+        { firmwareData: base64Content, boardFqbn },
         { showSuccessToast: false, showErrorToast: false }
       );
 

@@ -1,5 +1,5 @@
 import { getWebSocketUrl } from './api';
-import { MOCK_HUBS_ENABLED, createMockSocket } from '@/mock/mockBackend';
+import { MOCK_HUBS_ENABLED, createMockSocket } from '@/mock';
 import type {
   WebSocketMessage,
   SubscribeMessage,
