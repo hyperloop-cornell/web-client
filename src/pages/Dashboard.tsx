@@ -86,7 +86,7 @@ export function Dashboard() {
 
       {/* Hub List */}
       <div className="space-y-4">
-        {isLoading ? (
+        {isLoading && hubs.length === 0 ? (
           <Card>
             <CardContent className="flex items-center justify-center py-8 sm:py-12">
               <div className="text-center">

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { authApi } from '@/services/api';
 import { webSocketService } from '@/services/websocket';
+import { useHubStore } from '@/stores/hubStore';
+import { useTelemetryStore } from '@/stores/telemetryStore';
 import type { User, LoginCredentials } from '@/types';
 
 interface AuthState {
@@ -120,6 +122,10 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     localStorage.removeItem('auth_token');
+
+    // The live stream's subscriptions end with the session; drop the UI state that mirrors them
+    useHubStore.setState({ activeSubscriptions: [], selectedDevices: new Set(), tasks: [] });
+    useTelemetryStore.setState({ devices: new Map(), detectedSensors: new Map() });
 
     // Disconnect WebSocket on logout
     try {
