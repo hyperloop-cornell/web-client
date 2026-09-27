@@ -4,6 +4,7 @@ import { Loader2, RotateCw, Send, Zap, XCircle } from 'lucide-react';
 import { commandService } from '@/services/commandService';
 import type { CommandType, CommandParams } from '@/services/commandService';
 import { useHubStore } from '@/stores/hubStore';
+import { useIsViewer } from '@/stores/authStore';
 
 interface CommandButtonProps {
   hubId: string;
@@ -47,11 +48,12 @@ export function CommandButton({
 }: CommandButtonProps) {
   const [isExecuting, setIsExecuting] = useState(false);
   const activeTask = useHubStore((state) => state.getActiveTaskForPort(portId));
+  const isViewer = useIsViewer();
 
   const Icon = COMMAND_ICONS[commandType];
   const displayLabel = label || COMMAND_LABELS[commandType];
 
-  const isDisabled = disabled || isExecuting || !!activeTask;
+  const isDisabled = disabled || isViewer || isExecuting || !!activeTask;
   const isRunning = activeTask?.status === 'running';
   const isPending = activeTask?.status === 'pending';
 
@@ -66,7 +68,6 @@ export function CommandButton({
         portId,
         commandType,
         params,
-        timeoutMs: 30000,
       });
     } finally {
       // Keep button disabled while task is running
@@ -76,6 +77,7 @@ export function CommandButton({
   };
 
   const getTooltipContent = () => {
+    if (isViewer) return 'View-only mode cannot send commands';
     if (isPending) return 'Command queued...';
     if (isRunning) return 'Command executing...';
     if (isExecuting) return 'Sending command...';

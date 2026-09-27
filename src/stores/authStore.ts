@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { authApi } from '@/services/api';
 import { webSocketService } from '@/services/websocket';
+import { useHubStore } from '@/stores/hubStore';
+import { useTelemetryStore } from '@/stores/telemetryStore';
 import type { User, LoginCredentials } from '@/types';
 
 interface AuthState {
@@ -103,9 +105,9 @@ export const useAuthStore = create<AuthState>((set) => ({
         isLoading: false,
         error: null,
       });
-    } catch (error: any) {
-      const errorMessage =
-        error.response?.data?.detail || 'View-only login failed. Please try again.';
+    } catch (error: unknown) {
+      const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+      const errorMessage = typeof detail === 'string' ? detail : 'View-only login failed. Please try again.';
       set({
         user: null,
         token: null,
@@ -120,6 +122,10 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     localStorage.removeItem('auth_token');
+
+    // The live stream's subscriptions end with the session; drop the UI state that mirrors them
+    useHubStore.setState({ activeSubscriptions: [], selectedDevices: new Set(), tasks: [] });
+    useTelemetryStore.setState({ devices: new Map(), detectedSensors: new Map() });
 
     // Disconnect WebSocket on logout
     try {
@@ -176,3 +182,6 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   clearError: () => set({ error: null }),
 }));
+
+/** True for view-only sessions; command controls are disabled (the cloud rejects them anyway). */
+export const useIsViewer = (): boolean => useAuthStore((state) => state.user?.role === 'viewer');

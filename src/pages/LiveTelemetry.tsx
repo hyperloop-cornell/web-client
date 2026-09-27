@@ -26,6 +26,7 @@ import type {
 } from '@/types';
 import { isMergedChart } from '@/types';
 import { useHubStore } from '@/stores/hubStore';
+import { useIsViewer } from '@/stores/authStore';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { ChartSchemaModal } from '@/components/ChartSchemaModal';
 import { SchemaDropdown } from '@/components/SchemaDropdown';
@@ -255,6 +256,8 @@ export function LiveTelemetry() {
     setChartOrder(newOrder);
   };
 
+  const isViewer = useIsViewer();
+
   const handleSerialInput = (key: string, value: string) => {
     setSerialInputs(new Map(serialInputs).set(key, value));
   };
@@ -369,7 +372,8 @@ export function LiveTelemetry() {
                         <div className="flex items-center gap-2">
                           <Input
                             type="text"
-                            placeholder="Type data to send..."
+                            placeholder={isViewer ? 'View-only mode cannot send data' : 'Type data to send...'}
+                            disabled={isViewer}
                             value={inputValue}
                             onChange={(e) => handleSerialInput(key, e.target.value)}
                             onKeyDown={(e) => {
@@ -383,7 +387,7 @@ export function LiveTelemetry() {
                           <Button
                             onClick={() => handleSendSerial(sub.hubId, sub.portId, key)}
                             size="sm"
-                            disabled={!inputValue.trim()}
+                            disabled={isViewer || !inputValue.trim()}
                           >
                             <Send className="h-4 w-4" />
                           </Button>

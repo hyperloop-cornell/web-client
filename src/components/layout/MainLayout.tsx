@@ -24,7 +24,7 @@ export function MainLayout({ children }: MainLayoutProps) {
     { name: 'Hub Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Device Manager', href: '/devices', icon: Layers },
     { name: 'Live Telemetry', href: '/telemetry', icon: Activity },
-    { name: 'Arduino Flash', href: '/flash', icon: Zap },
+    { name: 'Firmware Flash', href: '/flash', icon: Zap },
   ];
 
   const isActive = (path: string) => {
