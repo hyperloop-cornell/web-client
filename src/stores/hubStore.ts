@@ -1,12 +1,13 @@
 import { create } from 'zustand';
 import { hubsApi } from '@/services/api';
-import type { HubInfo, ActiveSubscription, Task } from '@/types';
+import type { HubInfo, ActiveSubscription, Task, HubHealth } from '@/types';
 
 interface HubState {
   hubs: HubInfo[];
   activeSubscriptions: ActiveSubscription[];
   selectedDevices: Set<string>; // Set of "hubId:portId" strings
   tasks: Task[]; // Active command tasks
+  health: Record<string, HubHealth>; // Latest health message per hub
   isLoading: boolean;
   error: string | null;
 
@@ -21,7 +22,8 @@ interface HubState {
   
   // Task management
   addTask: (task: Task) => void;
-  updateTaskStatus: (update: { task_id: string; status: Task['status']; result?: unknown; error?: string }) => void;
+  updateTaskStatus: (update: { task_id: string; status: Task['status']; result?: unknown; error?: string | null }) => void;
+  updateHealth: (hubId: string, health: HubHealth) => void;
   removeTask: (taskId: string) => void;
   getActiveTaskForPort: (portId: string) => Task | undefined;
   cleanupCompletedTasks: () => void;
@@ -36,6 +38,7 @@ export const useHubStore = create<HubState>((set, get) => ({
   activeSubscriptions: [],
   selectedDevices: new Set(),
   tasks: [],
+  health: {},
   isLoading: false,
   error: null,
 
@@ -152,13 +155,13 @@ export const useHubStore = create<HubState>((set, get) => ({
           if (update.result !== undefined) {
             updatedTask.result = update.result;
           }
-          if (update.error !== undefined) {
+          if (update.error !== undefined && update.error !== null) {
             updatedTask.error = update.error;
           }
           if (update.status === 'running' && !task.started_at) {
             updatedTask.started_at = new Date().toISOString();
           }
-          if ((update.status === 'completed' || update.status === 'failed') && !task.completed_at) {
+          if ((update.status === 'completed' || update.status === 'failed' || update.status === 'cancelled') && !task.completed_at) {
             updatedTask.completed_at = new Date().toISOString();
           }
           
@@ -167,6 +170,10 @@ export const useHubStore = create<HubState>((set, get) => ({
         return task;
       }),
     }));
+  },
+
+  updateHealth: (hubId: string, health: HubHealth) => {
+    set((state) => ({ health: { ...state.health, [hubId]: health } }));
   },
 
   removeTask: (taskId: string) => {
@@ -187,7 +194,7 @@ export const useHubStore = create<HubState>((set, get) => ({
   cleanupCompletedTasks: () => {
     set((state) => ({
       tasks: state.tasks.filter(
-        (task) => task.status !== 'completed' && task.status !== 'failed'
+        (task) => task.status === 'pending' || task.status === 'running'
       ),
     }));
   },

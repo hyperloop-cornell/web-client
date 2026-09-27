@@ -1,11 +1,10 @@
-import { hubsApi } from './api';
-import type { TaskStatusResponse, Task } from '../types';
+import { hubsApi, type FlashCommandPayload } from './api';
+import { toTaskState, type TaskStatusResponse } from '../types';
 import { useHubStore } from '../stores/hubStore';
 
 // Command types supported by the service
 export type CommandType = 'restart' | 'serial_write' | 'flash' | 'close';
 
-// Command parameters for each command type
 export interface RestartCommandParams {
   priority?: number;
 }
@@ -15,11 +14,7 @@ export interface SerialWriteCommandParams {
   priority?: number;
 }
 
-export interface FlashCommandParams {
-  firmwareData: string;
-  boardFqbn?: string;
-  priority?: number;
-}
+export type FlashCommandParams = FlashCommandPayload;
 
 export interface CloseCommandParams {
   priority?: number;
@@ -37,7 +32,7 @@ export interface CommandOptions {
   portId: string;
   commandType: CommandType;
   params?: CommandParams;
-  timeoutMs?: number; // Default: 30000
+  timeoutMs?: number; // Default depends on the command (see DEFAULT_TIMEOUT_MS)
   showSuccessToast?: boolean; // Default: true
   showErrorToast?: boolean; // Default: true
 }
@@ -52,33 +47,34 @@ export interface CommandResult {
 }
 
 /**
+ * How long the GUI waits for a final task status before marking a command failed. Flashing
+ * includes compiling on the hub: STM32 builds on a Pi can take several minutes (the hub allows
+ * up to 15 minutes, see rpi-hub-server config/boards.yaml compile_timeout).
+ */
+const DEFAULT_TIMEOUT_MS: Record<CommandType, number> = {
+  serial_write: 30_000,
+  restart: 45_000,
+  close: 30_000,
+  flash: 17 * 60_000,
+};
+
+function errorDetail(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'response' in error) {
+    const data = (error as { response?: { data?: { detail?: unknown } } }).response?.data;
+    if (typeof data?.detail === 'string') return data.detail;
+  }
+  return error instanceof Error ? error.message : 'Unknown error';
+}
+
+/**
  * Centralized command service for executing device commands (restart, serial write, flash, etc.)
  * Features:
  * - Unified interface for all command types
- * - Automatic task tracking in hubStore
- * - 30-second timeout with auto-cleanup
- * - Toast notifications for success/error
+ * - Automatic task tracking in hubStore (final status arrives over the WebSocket)
+ * - Per-command timeout with auto-cleanup
  * - Prevents duplicate commands for same device
  */
 class CommandService {
-  private readonly DEFAULT_TIMEOUT_MS = 30000;
-
-  private async buildCloseCommandResponse(
-    hubId: string,
-    portId: string,
-    priority?: number
-  ): Promise<TaskStatusResponse> {
-    const closeResponse = await hubsApi.closeConnection(hubId, portId, priority);
-
-    return {
-      task_id: closeResponse.commandId,
-      command_type: 'close',
-      status: closeResponse.status,
-      priority: priority ?? 1,
-      created_at: new Date().toISOString(),
-    };
-  }
-
   /**
    * Execute a command on a device
    */
@@ -88,7 +84,7 @@ class CommandService {
       portId,
       commandType,
       params = {},
-      timeoutMs = this.DEFAULT_TIMEOUT_MS,
+      timeoutMs = DEFAULT_TIMEOUT_MS[commandType],
       showSuccessToast = true,
       showErrorToast = true,
     } = options;
@@ -108,16 +104,11 @@ class CommandService {
     }
 
     try {
-      // Send command to backend
       let response: TaskStatusResponse;
 
       switch (commandType) {
         case 'restart':
-          response = await hubsApi.sendRestartCommand(
-            hubId,
-            portId,
-            (params as RestartCommandParams).priority
-          );
+          response = await hubsApi.sendRestartCommand(hubId, portId, (params as RestartCommandParams).priority);
           break;
 
         case 'serial_write':
@@ -130,42 +121,30 @@ class CommandService {
           break;
 
         case 'flash':
-          response = await hubsApi.sendFlashCommand(
-            hubId,
-            portId,
-            (params as FlashCommandParams).firmwareData,
-            (params as FlashCommandParams).priority,
-            (params as FlashCommandParams).boardFqbn
-          );
+          response = await hubsApi.sendFlashCommand(hubId, portId, params as FlashCommandParams);
           break;
 
         case 'close':
-          response = await this.buildCloseCommandResponse(
-            hubId,
-            portId,
-            (params as CloseCommandParams).priority
-          );
+          response = await hubsApi.closeConnection(hubId, portId, (params as CloseCommandParams).priority);
           break;
 
         default:
           throw new Error(`Unsupported command type: ${commandType}`);
       }
 
-      // Track task in store
-      useHubStore.getState().addTask({
+      const store = useHubStore.getState();
+      store.addTask({
         task_id: response.task_id,
-        command_type: response.command_type,
-        status: response.status as Task['status'],
-        priority: response.priority,
+        command_type: response.command_type ?? commandType,
+        status: toTaskState(response.status),
+        priority: response.priority ?? 5,
         port_id: portId,
         hub_id: hubId,
-        created_at: response.created_at,
+        created_at: response.created_at ?? response.timestamp,
       });
 
-      // Set timeout for auto-cleanup
       this.scheduleTaskTimeout(response.task_id, timeoutMs);
 
-      // Log success for command sent
       if (showSuccessToast) {
         console.log(`${this.getCommandLabel(commandType)} command sent`);
       }
@@ -176,8 +155,8 @@ class CommandService {
         response,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      
+      const errorMessage = errorDetail(error);
+
       if (showErrorToast) {
         console.error(`Failed to send ${this.getCommandLabel(commandType)}: ${errorMessage}`);
       }
@@ -190,27 +169,15 @@ class CommandService {
     }
   }
 
-  /**
-   * Restart a device
-   */
   async restart(
     hubId: string,
     portId: string,
     priority?: number,
     options?: { showSuccessToast?: boolean; showErrorToast?: boolean }
   ): Promise<CommandResult> {
-    return this.executeCommand({
-      hubId,
-      portId,
-      commandType: 'restart',
-      params: { priority },
-      ...options,
-    });
+    return this.executeCommand({ hubId, portId, commandType: 'restart', params: { priority }, ...options });
   }
 
-  /**
-   * Send serial data to a device
-   */
   async serialWrite(
     hubId: string,
     portId: string,
@@ -218,51 +185,25 @@ class CommandService {
     priority?: number,
     options?: { showSuccessToast?: boolean; showErrorToast?: boolean }
   ): Promise<CommandResult> {
-    return this.executeCommand({
-      hubId,
-      portId,
-      commandType: 'serial_write',
-      params: { data, priority },
-      ...options,
-    });
+    return this.executeCommand({ hubId, portId, commandType: 'serial_write', params: { data, priority }, ...options });
   }
 
-  /**
-   * Flash firmware to a device
-   */
   async flash(
     hubId: string,
     portId: string,
-    firmwareData: string,
-    boardFqbn?: string,
-    priority?: number,
+    payload: FlashCommandPayload,
     options?: { showSuccessToast?: boolean; showErrorToast?: boolean }
   ): Promise<CommandResult> {
-    return this.executeCommand({
-      hubId,
-      portId,
-      commandType: 'flash',
-      params: { firmwareData, boardFqbn, priority },
-      ...options,
-    });
+    return this.executeCommand({ hubId, portId, commandType: 'flash', params: payload, ...options });
   }
 
-  /**
-   * Close a device connection
-   */
   async close(
     hubId: string,
     portId: string,
     priority?: number,
     options?: { showSuccessToast?: boolean; showErrorToast?: boolean }
   ): Promise<CommandResult> {
-    return this.executeCommand({
-      hubId,
-      portId,
-      commandType: 'close',
-      params: { priority },
-      ...options,
-    });
+    return this.executeCommand({ hubId, portId, commandType: 'close', params: { priority }, ...options });
   }
 
   /**
@@ -271,7 +212,7 @@ class CommandService {
   private scheduleTaskTimeout(taskId: string, timeoutMs: number): void {
     setTimeout(() => {
       const task = useHubStore.getState().tasks.find((t) => t.task_id === taskId);
-      
+
       // Only timeout if task is still pending or running
       if (task && (task.status === 'pending' || task.status === 'running')) {
         useHubStore.getState().updateTaskStatus({
@@ -279,21 +220,19 @@ class CommandService {
           status: 'failed',
           error: 'Command timeout - no response received',
         });
-        
+
         console.error(`${this.getCommandLabel(task.command_type)} timed out after ${timeoutMs / 1000}s`);
       }
     }, timeoutMs);
   }
 
-  /**
-   * Get human-readable label for command type
-   */
   private getCommandLabel(commandType: string): string {
     const labels: Record<string, string> = {
       restart: 'Restart',
       serial_write: 'Serial Write',
       flash: 'Flash',
       close: 'Close Connection',
+      close_connection: 'Close Connection',
     };
     return labels[commandType] || commandType;
   }

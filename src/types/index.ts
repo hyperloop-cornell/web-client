@@ -1,138 +1,72 @@
+import type { components } from './api.gen';
+
+// Wire types come from cloud-services' contract (src/types/api.gen.ts, regenerated with
+// `npm run gen:types`). Do not redefine them here: the generated file is what keeps the GUI,
+// the mock backend and the cloud in agreement.
+type Schemas = components['schemas'];
+
 // Authentication types
 export interface LoginCredentials {
-  username: string;
-  password: string;
+  username: string; // NetID
+  password: string; // team password
 }
 
-export interface AuthToken {
-  access_token: string;
-  token_type: string;
-}
+export type AuthToken = Schemas['TokenResponse'];
+
+export type UserRole = 'operator' | 'viewer';
 
 export interface User {
   username: string;
-  role?: string;  // "admin" or "viewer"
+  email?: string | null;
+  full_name?: string | null;
+  role?: UserRole | string | null;
 }
 
 // Hub types
-export interface HubInfo {
-  hubId: string;
-  connected: boolean;
-  connectedAt?: string;
-  lastSeen?: string;
-  version?: string;
-}
+export type HubInfo = Schemas['HubInfo'];
+export type HubProfile = Schemas['HubProfile'];
+export type BoardProfileInfo = Schemas['BoardProfileInfo'];
 
 // Port and Connection types
-export interface PortInfo {
-  port_id: string;
-  port: string;
-  description?: string;
-  manufacturer?: string;
-  serial_number?: string;
-  vendor_id?: string;
-  product_id?: string;
-}
-
-export interface ConnectionInfo {
-  port_id: string;
-  status: string;
-  baud_rate: number;
-  session_id: string;
-  bytes_read: number;
-  bytes_written: number;
-  connected_at?: string;
-}
+export type PortInfo = Schemas['PortInfo'];
+export type PortListResponse = Schemas['PortListResponse'];
+export type ConnectionInfo = Schemas['ConnectionInfo'];
+export type ConnectionListResponse = Schemas['ConnectionListResponse'];
 
 // Telemetry types
-export interface TelemetryEntry {
-  timestamp: string;
-  portId: string;
-  sessionId: string;
-  data: string; // base64 encoded
-  dataSizeBytes: number;
-}
+export type TelemetryEntry = Schemas['TelemetryEntry'];
+export type TelemetryListResponse = Schemas['TelemetryListResponse'];
 
-export interface TelemetryMessage {
-  type: 'telemetry_stream';
-  hubId: string;
-  portId: string;
-  sessionId: string;
-  timestamp: string;
-  data: string; // base64 encoded
-  dataSizeBytes?: number;
-}
+// Commands
+export type TaskStatusResponse = Schemas['TaskStatusResponse'];
+export type FlashFirmwareRequest = Schemas['FlashFirmwareRequest'];
+export type ArtifactFormat = NonNullable<FlashFirmwareRequest['artifactFormat']>;
 
-// WebSocket message types
-export interface SubscribeMessage {
-  type: 'subscribe';
-  subscriptions: DeviceSubscription[];
-}
-
-export interface UnsubscribeMessage {
-  type: 'unsubscribe';
-  subscriptions: DeviceSubscription[];
-}
-
-export interface SubscriptionStatusMessage {
-  type: 'subscription_status';
-  subscriptions: {
-    hubId: string;
-    portId: string;
-    status: 'active' | 'inactive';
-  }[];
-}
-
-export interface HealthMessage {
-  type: 'health';
-  hubId: string;
-  timestamp: string;
-  cpu_percent?: number;
-  memory_percent?: number;
-  disk_percent?: number;
-}
-
-export interface DeviceEventMessage {
-  type: 'device_event';
-  hubId: string;
-  timestamp: string;
-  event: 'connected' | 'disconnected';
-  portId: string;
-}
-
-export interface TaskStatusMessage {
-  type: 'task_status';
-  task_id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  result?: unknown;
-  error?: string;
-  timestamp: string;
-}
-
-export interface PingMessage {
-  type: 'ping';
-  timestamp: string;
-}
-
-export interface PongMessage {
-  type: 'pong';
-  timestamp: string;
-}
+// WebSocket messages (cloud -> browser)
+export type ConnectedMessage = Schemas['ConnectedMessage'];
+export type PingMessage = Schemas['PingMessage'];
+export type TelemetryMessage = Schemas['TelemetryStreamMessage'];
+export type HealthMessage = Schemas['HealthBroadcast'];
+export type DeviceEventMessage = Schemas['DeviceEventBroadcast'];
+export type TaskStatusMessage = Schemas['TaskStatusBroadcast'];
+export type SubscriptionStatusMessage = Schemas['SubscriptionStatusMessage'];
+export type HubStatusMessage = Schemas['HubStatusBroadcast'];
 
 export type WebSocketMessage =
+  | ConnectedMessage
+  | PingMessage
   | TelemetryMessage
   | HealthMessage
   | DeviceEventMessage
-  | SubscriptionStatusMessage
   | TaskStatusMessage
-  | PingMessage
-  | PongMessage;
+  | SubscriptionStatusMessage
+  | HubStatusMessage;
 
-// Subscription types
-export interface DeviceSubscription {
-  hubId: string;
-  portId: string;
-}
+// WebSocket messages (browser -> cloud)
+export type SubscribeMessage = Schemas['SubscribeMessage'];
+export type UnsubscribeMessage = Schemas['UnsubscribeMessage'];
+export type PongMessage = Schemas['PongMessage'];
+export type DeviceSubscription = Schemas['DeviceSubscription'];
 
 export interface ActiveSubscription extends DeviceSubscription {
   sensorType?: string;
@@ -227,29 +161,35 @@ export interface CustomTimeRange {
   end: Date;
 }
 
-// Task types
-export interface TaskStatusResponse {
+// Task tracking in the GUI (built from TaskStatusResponse + task_status messages)
+export type TaskState = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface Task {
   task_id: string;
   command_type: string;
-  status: string;
+  status: TaskState;
   priority: number;
-  result?: string;
-  error?: string;
+  port_id: string;
+  hub_id: string;
+  result?: unknown;
+  error?: string | null;
   created_at: string;
   started_at?: string;
   completed_at?: string;
 }
 
-export interface Task {
-  task_id: string;
-  command_type: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  priority: number;
-  port_id: string;
-  hub_id: string;
-  result?: unknown;
-  error?: string;
-  created_at: string;
-  started_at?: string;
-  completed_at?: string;
+export function toTaskState(status: string): TaskState {
+  return (['pending', 'running', 'completed', 'failed', 'cancelled'] as const).includes(status as TaskState)
+    ? (status as TaskState)
+    : 'failed';
+}
+
+// Live hub state from health messages
+export interface HubHealth {
+  timestamp: string;
+  cpu_percent?: number | null;
+  memory_percent?: number | null;
+  disk_percent?: number | null;
+  mode?: string | null;
+  uplink?: ({ active?: string | null; stale?: boolean } & Record<string, unknown>) | null;
 }
