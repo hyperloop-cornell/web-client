@@ -10,7 +10,8 @@ import { commandService } from '@/services/commandService';
 import sketches from '@/config/arduino-sketches.json';
 import { BINARY_FORMATS, BOARDS, findBoard, flasherFor, formatFromFileName, hubFlashFormats } from '@/config/boards';
 import { useOpenTerminal } from '@/hooks/useDeviceActions';
-import { clock, deviceKey, plural } from '@/lib/format';
+import { clock, deviceKey, duration, msSince, plural } from '@/lib/format';
+import { useNow } from '@/hooks/useTicker';
 import { deviceName } from '@/lib/devices';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -87,30 +88,34 @@ function TimelineRow({ label, time, state }: { label: string; time?: string; sta
 }
 
 function FlashProgress({ task, firmware, board, hubId, portPath }: { task: Task; firmware: Firmware | null; board?: BoardProfileInfo; hubId: string; portPath: string }) {
+  const now = useNow(1000);
   const ino = firmware?.format === 'ino';
   const openocd = flasherFor(board) === 'openocd';
   const name = board?.name ?? 'board';
   const { status } = task;
   const failed = status === 'failed' || status === 'cancelled';
 
+  // Pending and running read the same: hubs only report a task when it is queued and when it ends
   const headline =
-    status === 'completed'
-      ? 'Flash complete'
-      : status === 'pending'
-        ? <>Queued on <span className="whitespace-nowrap">{hubId}</span></>
-        : failed
-          ? status === 'cancelled'
-            ? 'Flash cancelled'
-            : 'Flash failed'
-          : ino
-            ? <>Compiling and flashing on <span className="whitespace-nowrap">{hubId}</span>…</>
-            : `Flashing ${name}…`;
+    status === 'completed' ? (
+      'Flash complete'
+    ) : failed ? (
+      status === 'cancelled' ? 'Flash cancelled' : 'Flash failed'
+    ) : ino ? (
+      <>
+        Compiling and flashing on <span className="whitespace-nowrap">{hubId}</span>…
+      </>
+    ) : (
+      `Flashing ${name}…`
+    );
 
   const detail =
     status === 'completed'
       ? `${name} on ${portPath} is running ${firmware?.source ?? 'the new firmware'}.`
       : status === 'pending'
-        ? 'Waiting for the hub to pick up the task.'
+        ? `Sent ${duration(msSince(task.created_at, now) ?? 0)} ago. The hub reports back when the flash finishes${
+            ino && openocd ? '; STM32 compiles can take several minutes' : ''
+          }.`
         : failed
           ? (task.error ?? 'The hub reported an error.')
           : ino
@@ -120,8 +125,8 @@ function FlashProgress({ task, firmware, board, hubId, portPath }: { task: Task;
               : `Uploading .${firmware?.format} over ${portPath}.`;
 
   const progress = task.progress;
-  const bar =
-    status === 'completed' || failed ? 100 : status === 'pending' ? 6 : progress != null ? Math.max(8, Math.min(100, progress)) : null;
+  // Hubs do not report "running" yet (see .claude/ui-overhaul.md), so pending animates too
+  const bar = status === 'completed' || failed ? 100 : progress != null ? Math.max(8, Math.min(100, progress)) : null;
 
   const writeLabel = ino ? 'Compile and write' : 'Write firmware';
   return (
@@ -139,11 +144,11 @@ function FlashProgress({ task, firmware, board, hubId, portPath }: { task: Task;
         )}
       </div>
       <div className="mt-3.5 flex flex-col">
-        <TimelineRow label="Queued on hub" time={clock(task.created_at)} state={status === 'pending' ? 'active' : 'done'} />
+        <TimelineRow label="Sent to hub" time={clock(task.created_at)} state="done" />
         <TimelineRow
           label={writeLabel}
           time={task.started_at ? clock(task.started_at) : undefined}
-          state={status === 'running' ? 'active' : status === 'completed' ? 'done' : failed && task.started_at ? 'failed' : 'todo'}
+          state={status === 'running' || status === 'pending' ? 'active' : status === 'completed' ? 'done' : failed ? 'failed' : 'todo'}
         />
         <TimelineRow
           label={failed ? (status === 'cancelled' ? 'Cancelled' : 'Failed') : 'Board restarted'}
