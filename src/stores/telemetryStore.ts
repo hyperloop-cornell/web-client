@@ -1,249 +1,149 @@
 import { create } from 'zustand';
-import { throttle } from 'lodash';
-import type {
-  TelemetryMessage,
-  DeviceChartData,
-  FieldChartData,
-  ChartDataPoint,
-  TimeWindow,
-  SensorMapping,
-  ParsedSensorData,
-} from '@/types';
+import type { TelemetryMessage, DeviceChartData, FieldChartData, MergedChart, SensorMapping } from '@/types';
 import { parseTelemetryData } from '@/services/sensorParser';
+import { deviceKey } from '@/lib/format';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
+/** Terminal history kept per device. */
+const MAX_LINES = 500;
+
+export interface TerminalLine {
+  ts: number;
+  text: string;
+}
+
+/** A line the user sent from the terminal; its delivery state comes from the task in hubStore. */
+export interface SentLine {
+  ts: number;
+  text: string;
+  taskId: string | null;
+  error?: string;
+}
+
 interface DeviceTelemetryState {
-  rawData: string; // Terminal text buffer
-  hexData: string; // Hex dump
+  lines: TerminalLine[];
   sensorMapping?: SensorMapping;
   chartData: DeviceChartData;
   lastUpdate: number;
 }
 
+/** Chart order and merges on the Telemetry page; kept here so they survive navigation. */
+interface ChartLayout {
+  order: string[];
+  merged: MergedChart[];
+}
+
 interface TelemetryState {
-  // Map of deviceKey (hubId:portId) to telemetry state
+  // Keyed by hubId:portId
   devices: Map<string, DeviceTelemetryState>;
-  
-  // Map of deviceKey to detected sensor type
   detectedSensors: Map<string, string>;
-  
-  // Render throttle control
-  shouldUpdate: boolean;
-  
-  // Actions
+  sent: Record<string, SentLine[]>;
+  layout: ChartLayout;
+
   processTelemetry: (message: TelemetryMessage) => void;
   clearDevice: (hubId: string, portId: string) => void;
-  getDeviceData: (hubId: string, portId: string) => DeviceTelemetryState | undefined;
-  getChartData: (hubId: string, portId: string, timeWindow: TimeWindow) => FieldChartData[];
-  triggerUpdate: () => void;
+  recordSent: (key: string, line: SentLine) => void;
+  setLayout: (layout: ChartLayout) => void;
+  /** Drop an unsubscribed device from chart merges (a merge needs two sources). */
+  removeFromLayout: (key: string) => void;
+  reset: () => void;
 }
 
-function deviceKey(hubId: string, portId: string): string {
-  return `${hubId}:${portId}`;
-}
-
-function getTimeWindowMilliseconds(window: TimeWindow): number {
-  const windows = {
-    '5m': 5 * 60 * 1000,
-    '15m': 15 * 60 * 1000,
-    '30m': 30 * 60 * 1000,
-    '1h': 60 * 60 * 1000,
-  };
-  return windows[window as keyof typeof windows] ?? ONE_HOUR_MS;
-}
-
-function pruneOldDataPoints(
-  data: ChartDataPoint[],
-  maxAge: number = ONE_HOUR_MS
-): ChartDataPoint[] {
-  const now = Date.now();
-  return data.filter((point) => now - point.timestamp < maxAge);
-}
+const emptyLayout = (): ChartLayout => ({ order: [], merged: [] });
 
 export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   devices: new Map(),
   detectedSensors: new Map(),
-  shouldUpdate: true,
+  sent: {},
+  layout: emptyLayout(),
 
   processTelemetry: (message: TelemetryMessage) => {
     const key = deviceKey(message.hubId, message.portId);
     const state = get();
     const existing = state.devices.get(key);
 
-    // Parse the telemetry data
-    const { decoded, parsed, detectedSensor } = parseTelemetryData(
-      message.data,
-      existing?.sensorMapping
-    );
+    const { decoded, parsed, detectedSensor } = parseTelemetryData(message.data, existing?.sensorMapping);
+    const timestamp = new Date(message.timestamp).getTime();
+    const sensorMapping = detectedSensor || existing?.sensorMapping;
 
-    // Update detected sensor type
-    if (detectedSensor) {
-      set((state) => {
-        const newDetectedSensors = new Map(state.detectedSensors);
-        newDetectedSensors.set(key, detectedSensor.name);
-        return { detectedSensors: newDetectedSensors };
-      });
-    }
+    const newLines = decoded.lines.map((text) => ({ ts: timestamp, text }));
+    const lines = [...(existing?.lines ?? []), ...newLines];
+    if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
 
-    // Build terminal text
-    const terminalText = decoded.lines
-      .map((line) => `[${new Date(message.timestamp).toLocaleTimeString()}] ${line}`)
-      .join('\n');
-
-    // Build hex dump
-    const hexDump = decoded.raw.length > 0 
-      ? bytesToHexDump(decoded.raw)
-      : '';
-
-    // Initialize device state if it doesn't exist
-    let deviceState: DeviceTelemetryState;
-    
-    if (!existing) {
-      deviceState = {
-        rawData: terminalText,
-        hexData: hexDump,
-        sensorMapping: detectedSensor,
-        chartData: {
-          deviceId: key,
-          hubId: message.hubId,
-          portId: message.portId,
-          sensorName: detectedSensor?.name || 'Unknown',
-          fields: [],
-        },
-        lastUpdate: Date.now(),
-      };
-    } else {
-      // Append to existing data
-      deviceState = {
-        ...existing,
-        rawData: existing.rawData + '\n' + terminalText,
-        hexData: existing.hexData + hexDump,
-        sensorMapping: detectedSensor || existing.sensorMapping,
-        lastUpdate: Date.now(),
-      };
-
-      // Keep terminal buffer manageable (last 1000 lines)
-      const lines = deviceState.rawData.split('\n');
-      if (lines.length > 1000) {
-        deviceState.rawData = lines.slice(-1000).join('\n');
+    // Rebuild the field arrays instead of mutating them so consumers can rely on identity
+    let fields: FieldChartData[] = existing?.chartData.fields ?? [];
+    if (parsed.length > 0 && sensorMapping) {
+      const byName = new Map(fields.map((f) => [f.fieldName, f]));
+      const cutoff = Date.now() - ONE_HOUR_MS;
+      const added = new Map<string, { unit: string; color: string; points: { timestamp: number; value: number }[] }>();
+      for (const sample of parsed) {
+        for (const field of sample.fields) {
+          const entry = added.get(field.name) ?? { unit: field.unit, color: field.color, points: [] };
+          entry.points.push({ timestamp, value: field.value });
+          added.set(field.name, entry);
+        }
       }
-    }
-
-    // Update chart data with parsed sensor values
-    if (parsed.length > 0 && deviceState.sensorMapping) {
-      const timestamp = new Date(message.timestamp).getTime();
-
-      parsed.forEach((parsedData: ParsedSensorData) => {
-        parsedData.fields.forEach((field) => {
-          // Find or create field in chart data
-          let fieldData = deviceState.chartData.fields.find(
-            (f) => f.fieldName === field.name
-          );
-
-          if (!fieldData) {
-            fieldData = {
-              fieldName: field.name,
-              unit: field.unit,
-              color: field.color,
-              data: [],
-            };
-            deviceState.chartData.fields.push(fieldData);
-          }
-
-          // Add new data point
-          fieldData.data.push({
-            timestamp,
-            value: field.value,
-          });
-
-          // Prune old data (keep 1 hour)
-          fieldData.data = pruneOldDataPoints(fieldData.data, ONE_HOUR_MS);
+      for (const [name, entry] of added) {
+        const prev = byName.get(name);
+        const kept = prev ? prev.data.filter((p) => p.timestamp >= cutoff) : [];
+        byName.set(name, {
+          fieldName: name,
+          unit: prev?.unit ?? entry.unit,
+          color: prev?.color ?? entry.color,
+          data: [...kept, ...entry.points],
         });
-      });
-
-      // Update sensor name if detected
-      if (deviceState.sensorMapping) {
-        deviceState.chartData.sensorName = deviceState.sensorMapping.name;
       }
+      fields = Array.from(byName.values());
     }
 
-    // Update the store
-    const newDevices = new Map(state.devices);
-    newDevices.set(key, deviceState);
-    
-    set({ devices: newDevices });
+    const deviceState: DeviceTelemetryState = {
+      lines,
+      sensorMapping,
+      chartData: {
+        deviceId: key,
+        hubId: message.hubId,
+        portId: message.portId,
+        sensorName: sensorMapping?.name || existing?.chartData.sensorName || 'Unknown',
+        fields,
+      },
+      lastUpdate: Date.now(),
+    };
+
+    const devices = new Map(state.devices);
+    devices.set(key, deviceState);
+
+    if (detectedSensor && state.detectedSensors.get(key) !== detectedSensor.name) {
+      const detectedSensors = new Map(state.detectedSensors);
+      detectedSensors.set(key, detectedSensor.name);
+      set({ devices, detectedSensors });
+    } else {
+      set({ devices });
+    }
   },
 
   clearDevice: (hubId: string, portId: string) => {
-    const key = deviceKey(hubId, portId);
-    const newDevices = new Map(get().devices);
-    newDevices.delete(key);
-    set({ devices: newDevices });
+    const devices = new Map(get().devices);
+    devices.delete(deviceKey(hubId, portId));
+    set({ devices });
   },
 
-  getDeviceData: (hubId: string, portId: string) => {
-    const key = deviceKey(hubId, portId);
-    return get().devices.get(key);
+  recordSent: (key, line) => {
+    set((state) => ({ sent: { ...state.sent, [key]: [...(state.sent[key] ?? []), line].slice(-100) } }));
   },
 
-  getChartData: (hubId: string, portId: string, timeWindow: TimeWindow) => {
-    const key = deviceKey(hubId, portId);
-    const deviceData = get().devices.get(key);
-    
-    if (!deviceData || !deviceData.chartData.fields.length) {
-      return [];
-    }
+  setLayout: (layout) => set({ layout }),
 
-    const windowMs = getTimeWindowMilliseconds(timeWindow);
-    const now = Date.now();
-
-    // Filter data points by time window
-    return deviceData.chartData.fields.map((field) => ({
-      ...field,
-      data: field.data.filter((point) => now - point.timestamp < windowMs),
+  removeFromLayout: (key) => {
+    set((state) => ({
+      layout: {
+        order: state.layout.order.filter((id) => id !== key),
+        merged: state.layout.merged
+          .map((m) => ({ ...m, keys: m.keys.filter((k) => k !== key) }))
+          .filter((m) => m.keys.length > 1),
+      },
     }));
   },
 
-  triggerUpdate: () => {
-    set({ shouldUpdate: true });
-  },
+  reset: () => set({ devices: new Map(), detectedSensors: new Map(), sent: {}, layout: emptyLayout() }),
 }));
-
-// Helper function to convert bytes to hex dump (imported from sensorParser)
-function bytesToHexDump(bytes: Uint8Array, bytesPerLine = 16): string {
-  let result = '';
-  for (let i = 0; i < bytes.length; i += bytesPerLine) {
-    const offset = i.toString(16).padStart(8, '0').toUpperCase();
-    result += `${offset}  `;
-
-    const lineBytes = bytes.slice(i, Math.min(i + bytesPerLine, bytes.length));
-    const hexPart: string[] = [];
-    const asciiPart: string[] = [];
-
-    for (let j = 0; j < bytesPerLine; j++) {
-      if (j < lineBytes.length) {
-        const byte = lineBytes[j];
-        hexPart.push(byte.toString(16).padStart(2, '0').toUpperCase());
-        asciiPart.push(
-          byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.'
-        );
-      } else {
-        hexPart.push('  ');
-        asciiPart.push(' ');
-      }
-
-      if (j === 7) {
-        hexPart.push(' ');
-      }
-    }
-
-    result += hexPart.join(' ') + '  |' + asciiPart.join('') + '|\n';
-  }
-  return result;
-}
-
-// Throttled update trigger (250ms)
-export const throttledTriggerUpdate = throttle(() => {
-  useTelemetryStore.getState().triggerUpdate();
-}, 250);
