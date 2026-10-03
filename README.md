@@ -113,23 +113,30 @@ npm run preview
 ```
 src/
 ├── components/          # React components
-│   ├── auth/           # Authentication components
-│   ├── layout/         # Layout components
-│   └── ui/             # Reusable UI components
-├── pages/              # Page components
-│   ├── Dashboard.tsx          # Hub status overview
-│   ├── DeviceManager.tsx       # Device connections
-│   ├── LiveTelemetry.tsx       # Real-time data visualization
-│   └── ArduinoFlash.tsx        # Firmware flashing
+│   ├── auth/           # Login and route guard
+│   ├── layout/         # AppShell: header, socket handlers, sheet host, toasts
+│   ├── sheets/         # Side sheets: hub, device, serial terminal, add streams, schema
+│   ├── telemetry/      # ChartPanel (SVG charts, export)
+│   ├── flash/          # FirmwareEditor (CodeMirror)
+│   └── ui/             # Primitives: button, fields, overlays, status bits
+├── pages/              # One per tab
+│   ├── Hubs.tsx               # Hub table, health, uplink
+│   ├── Devices.tsx            # Ports per hub, subscribe, restart, flash
+│   ├── Telemetry.tsx          # Live streams, charts, merge, schemas
+│   └── Flash.tsx              # Three-step flash plan (Arduino and STM32)
 ├── services/           # API and WebSocket services
 │   ├── api.ts          # HTTP client
-│   ├── websocket.ts    # WebSocket management
+│   ├── websocket.ts    # WebSocket management (+ connection status)
+│   ├── subscriptions.ts # Subscribe/unsubscribe in one place
 │   ├── commandService.ts
 │   └── sensorParser.ts
 ├── stores/             # Zustand state management
 │   ├── authStore.ts    # Authentication state
-│   ├── hubStore.ts     # Hub connections state
-│   └── telemetryStore.ts # Telemetry data state
+│   ├── hubStore.ts     # Hubs, subscriptions, tasks, health
+│   ├── deviceStore.ts  # Ports and connections per hub
+│   ├── telemetryStore.ts # Terminal lines, chart data, chart layout
+│   └── uiStore.ts      # Open sheet, toasts
+├── hooks/              # Ticking clock, polling, device actions
 ├── types/              # TypeScript type definitions
 ├── lib/                # Utilities
 └── config/             # Configuration files
@@ -137,17 +144,26 @@ src/
 
 ## Pages
 
-### Dashboard
-Overview of connected hubs with status indicators, uptime, and device counts. 30-second refresh interval.
+The UI is a dark, black-and-Cornell-red theme. Design tokens (colors, fonts) live in one
+`@theme` block in `src/index.css`. The primary typeface is Uber Move, with Archivo as the free
+fallback; see `.claude/ui-overhaul.md` in hyperloop-gui for self-hosting Uber Move.
 
-### Device Manager
-View and manage device connections for each hub. Shows connected Arduino boards and serial connections.
+### Hubs
+Table of every hub: status, Wi-Fi or cellular uplink, device count, CPU/memory/disk, uptime and
+flash formats. Click a hub for its details sheet. Refreshes every 30 seconds.
 
-### Live Telemetry
-Real-time data visualization with interactive charts. Supports custom sensor schemas and drag-and-drop chart management.
+### Devices
+Ports grouped by hub with baud, traffic and stream state. Select several and subscribe from the
+floating bar; restart, flash or open any device's sheet from its row. Refreshes every 10 seconds.
 
-### Arduino Flash
-Interface for uploading firmware to connected Arduino devices. Requires arduino-cli on the backend.
+### Telemetry
+Live streams on the left (click one for its serial terminal), charts on the right. Drag a chart
+to reorder it, Shift-drop onto another to merge; export CSV, PNG, JPG or PDF. Custom schemas
+live under Schemas.
+
+### Flash
+Editor plus a three-step plan (target, firmware, flash) for Arduino boards (arduino-cli) and
+STM32 boards (OpenOCD over ST-LINK). Accepts .ino, .hex, .bin and .elf as the board allows.
 
 ## Environment Variables
 
@@ -187,7 +203,7 @@ The client automatically:
 ### Creating New Pages
 1. Create component in `src/pages/`
 2. Add route in `src/App.tsx`
-3. Add navigation link in `src/components/layout/MainLayout.tsx`
+3. Add navigation link in `NAV` in `src/components/layout/AppShell.tsx`
 
 ### Adding API Endpoints
 1. Define request/response types in `src/types/`
@@ -195,8 +211,8 @@ The client automatically:
 3. Use in component with `useEffect` and error handling
 
 ### Styling
-- Uses Tailwind CSS with custom configuration
-- Component library built on Radix UI
+- Tailwind CSS v4; tokens in the `@theme` block in `src/index.css` (`bg-brand`, `text-fg-2`, ...)
+- Small in-house primitives in `src/components/ui/`; Radix only for dialogs/sheets and menus
 - Icons from Lucide React
 
 ## Dependencies
