@@ -10,7 +10,10 @@ import type { User, LoginCredentials } from '@/types';
 interface AuthState {
   user: User | null;
   token: string | null;
+  /** True only once the cloud has confirmed the session and returned the user (and so their role). */
   isAuthenticated: boolean;
+  /** False until a token left in localStorage by an earlier visit has been checked with GET /auth/me. */
+  sessionChecked: boolean;
   isLoading: boolean;
   error: string | null;
 
@@ -22,10 +25,12 @@ interface AuthState {
   clearError: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
-  token: localStorage.getItem('auth_token'),
-  isAuthenticated: !!localStorage.getItem('auth_token'),
+  // A stored token may be expired, revoked or view-only, so it grants nothing until /auth/me answers
+  token: null,
+  isAuthenticated: false,
+  sessionChecked: !localStorage.getItem('auth_token'),
   isLoading: false,
   error: null,
 
@@ -52,6 +57,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         user,
         token,
         isAuthenticated: true,
+        sessionChecked: true,
         isLoading: false,
         error: null,
       });
@@ -73,6 +79,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         user: null,
         token: null,
         isAuthenticated: false,
+        sessionChecked: true,
         isLoading: false,
         error: errorMessage,
       });
@@ -104,6 +111,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         user,
         token,
         isAuthenticated: true,
+        sessionChecked: true,
         isLoading: false,
         error: null,
       });
@@ -114,6 +122,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         user: null,
         token: null,
         isAuthenticated: false,
+        sessionChecked: true,
         isLoading: false,
         error: errorMessage,
       });
@@ -142,14 +151,18 @@ export const useAuthStore = create<AuthState>((set) => ({
       user: null,
       token: null,
       isAuthenticated: false,
+      sessionChecked: true,
       error: null,
     });
   },
 
   checkAuth: async () => {
+    // StrictMode runs ProtectedRoute's effect twice; one /auth/me is enough
+    if (get().isLoading) return;
+
     const token = localStorage.getItem('auth_token');
     if (!token) {
-      set({ isAuthenticated: false, user: null, token: null });
+      set({ isAuthenticated: false, user: null, token: null, sessionChecked: true });
       return;
     }
 
@@ -170,6 +183,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         user,
         token,
         isAuthenticated: true,
+        sessionChecked: true,
         isLoading: false,
         error: null,
       });
@@ -179,6 +193,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         user: null,
         token: null,
         isAuthenticated: false,
+        sessionChecked: true,
         isLoading: false,
       });
     }
@@ -187,5 +202,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   clearError: () => set({ error: null }),
 }));
 
-/** True for view-only sessions; command controls are disabled (the cloud rejects them anyway). */
-export const useIsViewer = (): boolean => useAuthStore((state) => state.user?.role === 'viewer');
+/**
+ * True unless the cloud confirmed an operator session; command controls are disabled (the cloud rejects
+ * them anyway). Fails closed, so a session whose user has not loaded never shows operator controls.
+ */
+export const useIsViewer = (): boolean => useAuthStore((state) => state.user?.role !== 'operator');
