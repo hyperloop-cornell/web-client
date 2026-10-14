@@ -16,13 +16,20 @@ interface HubState {
   updateHub: (hub: HubInfo) => void;
   addSubscription: (subscription: ActiveSubscription) => void;
   removeSubscription: (hubId: string, portId: string) => void;
+  confirmSubscriptions: (keys: string[]) => void;
   toggleDeviceSelection: (hubId: string, portId: string) => void;
   clearDeviceSelection: () => void;
   getSelectedDevices: () => ActiveSubscription[];
   
   // Task management
   addTask: (task: Task) => void;
-  updateTaskStatus: (update: { task_id: string; status: Task['status']; result?: unknown; error?: string | null }) => void;
+  updateTaskStatus: (update: {
+    task_id: string;
+    status: Task['status'];
+    result?: unknown;
+    error?: string | null;
+    progress?: number | null;
+  }) => void;
   updateHealth: (hubId: string, health: HubHealth) => void;
   removeTask: (taskId: string) => void;
   getActiveTaskForPort: (portId: string) => Task | undefined;
@@ -97,6 +104,18 @@ export const useHubStore = create<HubState>((set, get) => ({
     }));
   },
 
+  confirmSubscriptions: (keys: string[]) => {
+    const wanted = new Set(keys);
+    if (!get().activeSubscriptions.some((s) => !s.confirmed && wanted.has(deviceKey(s.hubId, s.portId)))) {
+      return;
+    }
+    set((state) => ({
+      activeSubscriptions: state.activeSubscriptions.map((s) =>
+        !s.confirmed && wanted.has(deviceKey(s.hubId, s.portId)) ? { ...s, confirmed: true } : s
+      ),
+    }));
+  },
+
   toggleDeviceSelection: (hubId: string, portId: string) => {
     const key = deviceKey(hubId, portId);
     set((state) => {
@@ -157,6 +176,9 @@ export const useHubStore = create<HubState>((set, get) => ({
           }
           if (update.error !== undefined && update.error !== null) {
             updatedTask.error = update.error;
+          }
+          if (update.progress !== undefined && update.progress !== null) {
+            updatedTask.progress = update.progress;
           }
           if (update.status === 'running' && !task.started_at) {
             updatedTask.started_at = new Date().toISOString();

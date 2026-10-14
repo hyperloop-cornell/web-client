@@ -12,6 +12,11 @@ type OutboundWebSocketMessage = SubscribeMessage | UnsubscribeMessage | PongMess
 
 type MessageHandler = (message: WebSocketMessage) => void;
 
+/** What the header shows: connecting for the first time, live, retrying, or signed out. */
+export type CloudStatus = 'connecting' | 'connected' | 'reconnecting' | 'offline';
+
+type StatusListener = (status: CloudStatus) => void;
+
 function subscriptionKey(sub: DeviceSubscription): string {
   return `${sub.hubId}:${sub.portId}`;
 }
@@ -32,6 +37,8 @@ class WebSocketService {
   private messageHandlers: Set<MessageHandler> = new Set();
   private isIntentionallyClosed = false;
   private token: string | null = null;
+  private status: CloudStatus = 'offline';
+  private statusListeners: Set<StatusListener> = new Set();
 
   // Everything the user is subscribed to, keyed by hubId:portId (re-sent on reconnect)
   private subscriptions = new Map<string, DeviceSubscription>();
@@ -68,6 +75,8 @@ class WebSocketService {
       this.reconnectTimeout = null;
     }
 
+    this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
+
     try {
       const wsUrl = getWebSocketUrl(token);
       const socket = MOCK_HUBS_ENABLED ? createMockSocket(wsUrl) : new WebSocket(wsUrl);
@@ -75,6 +84,7 @@ class WebSocketService {
 
       socket.onopen = () => {
         this.reconnectAttempts = 0;
+        this.setStatus('connected');
         this.lastMessageTime = Date.now();
         this.startHeartbeatMonitoring();
 
@@ -104,6 +114,7 @@ class WebSocketService {
         this.stopHeartbeatMonitoring();
 
         if (!this.isIntentionallyClosed) {
+          this.setStatus('reconnecting');
           this.scheduleReconnect();
         }
       };
@@ -133,6 +144,7 @@ class WebSocketService {
       this.ws = null;
       socket.close();
     }
+    this.setStatus('offline');
   }
 
   /**
@@ -194,6 +206,24 @@ class WebSocketService {
     };
   }
 
+  /** Connection status changes, for the header indicator. Returns an unsubscribe function. */
+  onStatusChange(listener: StatusListener): () => void {
+    this.statusListeners.add(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+
+  getStatus(): CloudStatus {
+    return this.status;
+  }
+
+  private setStatus(status: CloudStatus): void {
+    if (status === this.status) return;
+    this.status = status;
+    this.statusListeners.forEach((listener) => listener(status));
+  }
+
   private send(message: OutboundWebSocketMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
@@ -252,6 +282,7 @@ class WebSocketService {
         this.ws = null;
         this.stopHeartbeatMonitoring();
         socket?.close();
+        this.setStatus('reconnecting');
 
         if (!this.isIntentionallyClosed && this.token) {
           this.scheduleReconnect();

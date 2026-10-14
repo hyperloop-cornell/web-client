@@ -38,3 +38,23 @@ export function formatFromFileName(name: string): ArtifactFormat | null {
 }
 
 export const BINARY_FORMATS: ReadonlySet<ArtifactFormat> = new Set(['bin', 'elf']);
+
+export type Flasher = 'arduino-cli' | 'openocd';
+
+/**
+ * Tool the hub flashes each board with (mirrors `flasher` in rpi-hub-server/config/boards.yaml).
+ * Not in the API contract yet; see .claude/ui-overhaul.md in hyperloop-gui for the plan to
+ * report it from the hub instead.
+ */
+const FLASHERS: Record<string, Flasher> = {
+  uno_r3: 'arduino-cli',
+  mega2560: 'arduino-cli',
+  nano_ch340: 'arduino-cli',
+  uno_r4_minima: 'arduino-cli',
+  uno_r4_wifi: 'arduino-cli',
+  disco_f407vg: 'openocd',
+};
+
+export function flasherFor(board: BoardProfileInfo | undefined): Flasher | undefined {
+  return board ? (FLASHERS[board.id] ?? 'arduino-cli') : undefined;
+}

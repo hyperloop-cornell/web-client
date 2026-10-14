@@ -1,35 +1,27 @@
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 
-interface ProtectedRouteProps {
-  children: React.ReactNode;
-}
-
-export function ProtectedRoute({ children }: ProtectedRouteProps) {
+export function ProtectedRoute({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading, checkAuth } = useAuthStore();
   const location = useLocation();
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      checkAuth();
-    }
+    if (!isAuthenticated) checkAuth();
   }, [isAuthenticated, checkAuth]);
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Loading...</p>
+      <div className="flex min-h-screen items-center justify-center bg-canvas">
+        <div className="flex flex-col items-center gap-3">
+          <div className="size-8 animate-spin rounded-full border-2 border-line border-t-fg" />
+          <p className="text-sm text-fg-3">Loading…</p>
         </div>
       </div>
     );
   }
 
-  if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
-  }
+  if (!isAuthenticated) return <Navigate to="/login" state={{ from: location }} replace />;
 
   return <>{children}</>;
 }

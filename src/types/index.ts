@@ -69,9 +69,9 @@ export type PongMessage = Schemas['PongMessage'];
 export type DeviceSubscription = Schemas['DeviceSubscription'];
 
 export interface ActiveSubscription extends DeviceSubscription {
-  sensorType?: string;
-  sensorName?: string;
   subscribedAt: string;
+  /** Set once the cloud reports the subscription active (subscription_status) or data arrives. */
+  confirmed?: boolean;
 }
 
 // Sensor types
@@ -135,16 +135,10 @@ export interface DeviceChartData {
   fields: FieldChartData[];
 }
 
-export interface MergedChartData {
+/** A chart the user built by shift-dropping one chart onto another. */
+export interface MergedChart {
   id: string;
-  sources: DeviceChartData[];
-  isMerged: true;
-}
-
-export type ChartData = DeviceChartData | MergedChartData;
-
-export function isMergedChart(data: ChartData): data is MergedChartData {
-  return 'isMerged' in data && data.isMerged === true;
+  keys: string[]; // hubId:portId of each source
 }
 
 // Time window types
@@ -173,6 +167,8 @@ export interface Task {
   hub_id: string;
   result?: unknown;
   error?: string | null;
+  /** 0-100 when the hub reports it (task_status.progress); null while unknown. */
+  progress?: number | null;
   created_at: string;
   started_at?: string;
   completed_at?: string;
