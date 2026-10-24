@@ -3,14 +3,15 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 
 export function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isLoading, checkAuth } = useAuthStore();
+  const { isAuthenticated, sessionChecked, isLoading, checkAuth } = useAuthStore();
   const location = useLocation();
 
+  // A token from an earlier visit is only trusted once /auth/me accepts it and says who it belongs to
   useEffect(() => {
-    if (!isAuthenticated) checkAuth();
-  }, [isAuthenticated, checkAuth]);
+    if (!sessionChecked) checkAuth();
+  }, [sessionChecked, checkAuth]);
 
-  if (isLoading) {
+  if (!sessionChecked || isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas">
         <div className="flex flex-col items-center gap-3">
